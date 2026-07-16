@@ -44,9 +44,11 @@ def run_inventory_crew():
     # Define the primary natural language instruction from store management
     inputs = {
         "query": (
-            "Perform a comprehensive review of our UAE store inventory. "
-            "Scan for any products that are low stock (below threshold) or near expiry (within 3 days). "
-            "Analyze sales trends to provide specific reorder quantities and strategic discount decisions."
+            "Perform a comprehensive review of our multi-store UAE inventory. "
+            "Scan for low stock (at or below threshold) or near-expiry items across all branches. "
+            "Determine if low stock can be resolved using inter-branch transfers based on connection distances and "
+            "allowable transfer configurations. If transfers aren't feasible, recommend external supplier orders using "
+            "the appropriate reorder multipliers, and suggest promotions for near-expiry products."
         )
     }
     
