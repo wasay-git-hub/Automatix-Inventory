@@ -1,6 +1,6 @@
 import os
 from crewai import Agent, LLM
-from tools import get_schema, run_db_query, get_system_date
+from tools import get_schema, run_db_query, get_system_date, run_db_modify_query
 
 # Initialize OpenAI LLM using CrewAI's native LLM wrapper to prevent Pydantic validation mismatches
 openai_api_key = os.environ.get("OPENAI_API_KEY")
@@ -89,3 +89,21 @@ analysis_agent = Agent(
     verbose=True,
     allow_delegation=False
 )
+
+# 5. The Command Specialist Agent (The Database Administrator)
+command_agent = Agent(
+    role="Database Administrator Specialist",
+    goal="Translate natural language operator instructions into valid database modification queries (INSERT, UPDATE, DELETE) and execute them.",
+    backstory=(
+        "You are an expert database administrator. You have full access to schema details and "
+        "write access to the database using the database modification tool. "
+        "When the user requests changes (like adding products, removing items, updating rules, or modifying stock levels), "
+        "you carefully inspect the database schema, write the correct SQL INSERT, UPDATE, or DELETE statements, and execute them. "
+        "You then check the schema/table to ensure the changes were committed successfully, and write a summary explaining what was modified."
+    ),
+    tools=[get_schema, run_db_query, run_db_modify_query],
+    llm=llm,
+    verbose=True,
+    allow_delegation=False
+)
+

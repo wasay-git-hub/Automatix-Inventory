@@ -80,6 +80,13 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<string[]>([]);
   const [auditReport, setAuditReport] = useState<string | null>(null);
 
+  // NLP Command Center states
+  const [activeConsoleTab, setActiveConsoleTab] = useState<"audit" | "command">("audit");
+  const [commandText, setCommandText] = useState("");
+  const [commandRunning, setCommandRunning] = useState(false);
+  const [commandLogs, setCommandLogs] = useState<string[]>([]);
+  const [commandResult, setCommandResult] = useState<string | null>(null);
+
   // Load active inventory data
   const fetchData = async () => {
     try {
@@ -205,6 +212,55 @@ export default function Home() {
     }
   };
 
+  // Run AI Agent Command Center (Database Writes)
+  const handleRunCommand = async () => {
+    if (!commandText.trim()) return;
+    try {
+      setCommandRunning(true);
+      setCommandResult(null);
+      setCommandLogs([
+        "[DB Specialist] Analyzing natural language instruction...",
+        "[DB Specialist] Inspecting database schema columns...",
+        "[DB Specialist] Formulating SQL write transactions..."
+      ]);
+      
+      // Simulate terminal log timing
+      const timer1 = setTimeout(() => {
+        setCommandLogs(prev => [...prev, "[DB Specialist] Writing database modification queries (INSERT/UPDATE/DELETE)..."]);
+      }, 2000);
+      const timer2 = setTimeout(() => {
+        setCommandLogs(prev => [...prev, "[DB Specialist] Executing queries and checking database locks..."]);
+      }, 5000);
+      const timer3 = setTimeout(() => {
+        setCommandLogs(prev => [...prev, "[DB Specialist] Committing changes to SQLite database..."]);
+      }, 8000);
+
+      const res = await fetch("http://localhost:8000/api/run-command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: commandText }),
+      });
+      
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Agent command execution failed.");
+      
+      setCommandLogs(prev => [...prev, "[Success] Database updated successfully and changes committed!"]);
+      setCommandResult(json.result);
+      setCommandText("");
+      
+      // Reload inventory values automatically on screen!
+      fetchData();
+    } catch (err: any) {
+      setCommandLogs(prev => [...prev, `[Error] ${err.message}`]);
+    } finally {
+      setCommandRunning(false);
+    }
+  };
+
   // Helper: check if product is near expiry
   const isNearExpiry = (expiryStr: string, nearExpiryThresholdDays: number): boolean => {
     const systemDate = new Date("2026-07-16");
@@ -215,9 +271,12 @@ export default function Home() {
   };
 
   // Simple Markdown display parser
-  const renderMarkdown = (text: string) => {
+  const renderMarkdown = (text: any) => {
     if (!text) return null;
-    const lines = text.split("\n");
+    const textStr = typeof text === "string"
+      ? text
+      : (text.raw && typeof text.raw === "string" ? text.raw : String(text));
+    const lines = textStr.split("\n");
     return lines.map((line, idx) => {
       if (line.startsWith("# ")) {
         return <h1 key={idx} className="text-2xl font-bold mt-6 mb-3 text-gold">{line.replace("# ", "")}</h1>;
@@ -346,35 +405,6 @@ export default function Home() {
 
   if (!data) return null;
 
-  // Helper: Aggregate inventory levels by product across all branches
-  const getAggregatedInventory = (items: InventoryItem[]): InventoryItem[] => {
-    const aggregated: { [key: number]: InventoryItem } = {};
-
-    items.forEach(item => {
-      if (!aggregated[item.product_id]) {
-        aggregated[item.product_id] = {
-          ...item,
-          store_name: "All Branches",
-          stock_level: item.stock_level,
-          reorder_threshold: item.reorder_threshold,
-          expiry_date: item.expiry_date,
-        };
-      } else {
-        aggregated[item.product_id].stock_level += item.stock_level;
-        aggregated[item.product_id].reorder_threshold += item.reorder_threshold;
-        
-        // Keep the earliest expiry date
-        const currentExp = new Date(aggregated[item.product_id].expiry_date);
-        const itemExp = new Date(item.expiry_date);
-        if (itemExp < currentExp) {
-          aggregated[item.product_id].expiry_date = item.expiry_date;
-        }
-      }
-    });
-
-    return Object.values(aggregated);
-  };
-
   const { lowStock, nearExpiry } = getAlerts();
   const { standard: standardTransfers, overrides: overrideTransfers } = getTransferSuggestions();
   const currentBranchName = selectedStoreId 
@@ -383,7 +413,7 @@ export default function Home() {
 
   const filteredInventory = selectedStoreId
     ? data.inventory.filter(item => item.store_id === selectedStoreId)
-    : getAggregatedInventory(data.inventory);
+    : data.inventory;
 
   return (
     <div className="dashboard-grid">
@@ -396,7 +426,7 @@ export default function Home() {
           </div>
           <div className="brand-info">
             <h1 className="brand-name">Automatix</h1>
-            <span className="brand-subtitle">UAE Retail AI Squad</span>
+            <span className="brand-subtitle">Retail AI Squad</span>
           </div>
         </div>
 
@@ -522,7 +552,7 @@ export default function Home() {
               onClick={() => setSelectedStoreId(null)}
               className={`filter-btn ${selectedStoreId === null ? "active" : ""}`}
             >
-              All UAE
+              All Branches
             </button>
             {data.stores.map(store => (
               <button 
@@ -727,65 +757,135 @@ export default function Home() {
             </div>
           </div>
 
-          {/* CrewAI Agent Audit Panel */}
+          {/* CrewAI Agent Audit & Command Panel */}
           <div className="action-card">
-            <div className="action-header">
+            <div className="action-header" style={{ marginBottom: '16px' }}>
               <Terminal size={18} style={{ color: "#c3b189" }} />
-              <h3>Automatix Agent Audit</h3>
+              <h3>Automatix Agent Console</h3>
             </div>
-            <p className="action-desc">
-              Initiate the CrewAI multi-agent squad to execute DB schema scans, identify stocks, and compile the final Arabic Gulf trend replenishment forecasts.
-            </p>
-
-            <div className="audit-form">
-              <textarea 
-                placeholder="Optional: Enter a specific operational focus (e.g. 'Prioritize Sharjah branch dates and water levels for Ramadan demand')" 
-                value={customAuditQuery}
-                onChange={(e) => setCustomAuditQuery(e.target.value)}
-                className="audit-textarea"
-              />
-
+            
+            <div className="console-tabs">
               <button 
-                onClick={handleRunAudit}
-                disabled={auditRunning}
-                className="btn-primary"
-                style={{ justifyContent: 'center', width: '100%' }}
+                onClick={() => setActiveConsoleTab("audit")}
+                className={`console-tab-btn ${activeConsoleTab === "audit" ? "active" : ""}`}
               >
-                {auditRunning ? (
-                  <>
-                    <RefreshCw className="animate-spin" size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Auditing Inventory...
-                  </>
-                ) : (
-                  <>
-                    <FileText size={16} /> Trigger AI Squad Audit
-                  </>
-                )}
+                Audit Squad
               </button>
-
-              <div className="terminal-screen">
-                {auditLogs.length === 0 ? (
-                  <span className="text-muted">[System Idle] Press trigger to launch CrewAI inventory agents...</span>
-                ) : (
-                  auditLogs.map((log, index) => {
-                    const isSuccess = log.includes("[Success]");
-                    const isError = log.includes("[Error]");
-                    return (
-                      <div key={index} className={`terminal-line ${
-                        isSuccess ? "terminal-success" : isError ? "terminal-warning" : "terminal-info"
-                      }`}>
-                        {log}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+              <button 
+                onClick={() => setActiveConsoleTab("command")}
+                className={`console-tab-btn ${activeConsoleTab === "command" ? "active" : ""}`}
+              >
+                Command Center (Writes)
+              </button>
             </div>
+
+            {activeConsoleTab === "audit" ? (
+              <>
+                <p className="action-desc">
+                  Initiate the CrewAI multi-agent squad to execute DB schema scans, identify stocks, and compile the final Arabic Gulf trend replenishment forecasts.
+                </p>
+
+                <div className="audit-form">
+                  <textarea 
+                    placeholder="Optional: Enter a specific operational focus (e.g. 'Prioritize Sharjah branch dates and water levels for Ramadan demand')" 
+                    value={customAuditQuery}
+                    onChange={(e) => setCustomAuditQuery(e.target.value)}
+                    className="audit-textarea"
+                  />
+
+                  <button 
+                    onClick={handleRunAudit}
+                    disabled={auditRunning}
+                    className="btn-primary"
+                    style={{ justifyContent: 'center', width: '100%' }}
+                  >
+                    {auditRunning ? (
+                      <>
+                        <RefreshCw className="animate-spin" size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Auditing Inventory...
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={16} /> Trigger AI Squad Audit
+                      </>
+                    )}
+                  </button>
+
+                  <div className="terminal-screen">
+                    {auditLogs.length === 0 ? (
+                      <span className="text-muted">[System Idle] Press trigger to launch CrewAI inventory agents...</span>
+                    ) : (
+                      auditLogs.map((log, index) => {
+                        const isSuccess = log.includes("[Success]");
+                        const isError = log.includes("[Error]");
+                        return (
+                          <div key={index} className={`terminal-line ${
+                            isSuccess ? "terminal-success" : isError ? "terminal-warning" : "terminal-info"
+                          }`}>
+                            {log}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="action-desc">
+                  Issue natural language database instructions (e.g. adding products, removing items, adjusting configs). Commands commit updates directly to SQLite.
+                </p>
+
+                <div className="audit-form">
+                  <textarea 
+                    placeholder="Type database command (e.g. 'Add a new product Al Ain Juice 1L, category Beverages, price 6 AED. Set stock level to 50 in Sharjah Al Nahda and threshold to 15.')" 
+                    value={commandText}
+                    onChange={(e) => setCommandText(e.target.value)}
+                    className="audit-textarea"
+                  />
+
+                  <button 
+                    onClick={handleRunCommand}
+                    disabled={commandRunning}
+                    className="btn-primary"
+                    style={{ justifyContent: 'center', width: '100%' }}
+                  >
+                    {commandRunning ? (
+                      <>
+                        <RefreshCw className="animate-spin" size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Executing Command...
+                      </>
+                    ) : (
+                      <>
+                        <Terminal size={16} /> Execute Agent Command
+                      </>
+                    )}
+                  </button>
+
+                  <div className="terminal-screen">
+                    {commandLogs.length === 0 ? (
+                      <span className="text-muted">[System Idle] Enter command and press execute to launch DB Administrator agent...</span>
+                    ) : (
+                      commandLogs.map((log, index) => {
+                        const isSuccess = log.includes("[Success]");
+                        const isError = log.includes("[Error]");
+                        return (
+                          <div key={index} className={`terminal-line ${
+                            isSuccess ? "terminal-success" : isError ? "terminal-warning" : "terminal-info"
+                          }`}>
+                            {log}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
         </section>
 
-        {/* 3. Rendered Agent Audit Report */}
-        {auditReport && (
+        {/* 3. Rendered Agent Reports */}
+        {activeConsoleTab === "audit" && auditReport && (
           <section className="report-section">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', borderBottom: '1px solid #232733', paddingBottom: '16px' }}>
               <CheckCircle2 style={{ color: '#1ba56b' }} size={20} />
@@ -793,6 +893,18 @@ export default function Home() {
             </div>
             <div className="markdown-body">
               {renderMarkdown(auditReport)}
+            </div>
+          </section>
+        )}
+
+        {activeConsoleTab === "command" && commandResult && (
+          <section className="report-section">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', borderBottom: '1px solid #232733', paddingBottom: '16px' }}>
+              <CheckCircle2 style={{ color: '#1ba56b' }} size={20} />
+              <h3 className="text-xl font-bold font-display text-white" style={{ fontSize: '1.25rem', fontFamily: 'var(--font-display)', color: '#ffffff' }}>Command Execution Summary</h3>
+            </div>
+            <div className="markdown-body">
+              {renderMarkdown(commandResult)}
             </div>
           </section>
         )}

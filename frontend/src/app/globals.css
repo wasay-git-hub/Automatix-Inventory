@@ -838,3 +838,36 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 6px;
   color: #c9d1d9;
 }
+
+/* Console tab styles */
+.console-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--card-border);
+  padding-bottom: 10px;
+}
+
+.console-tab-btn {
+  background: transparent;
+  border: none;
+  color: #8c96a8;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.console-tab-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.console-tab-btn.active {
+  color: var(--accent-gold);
+  background: rgba(195, 177, 137, 0.1);
+  font-weight: 600;
+}

@@ -7,8 +7,8 @@ from typing import List, Dict, Any
 
 # Import CrewAI orchestration components
 from crewai import Crew
-from agents import interface_agent, sql_agent, alerts_agent, analysis_agent
-from tasks import sql_query_task, alerts_task, analysis_task, interface_task
+from agents import interface_agent, sql_agent, alerts_agent, analysis_agent, command_agent
+from tasks import sql_query_task, alerts_task, analysis_task, interface_task, command_task
 
 app = FastAPI(title="Automatix Inventory API", version="1.0.0")
 
@@ -35,6 +35,9 @@ class StockTransfer(BaseModel):
 
 class AuditRequest(BaseModel):
     custom_query: str = None
+
+class CommandRequest(BaseModel):
+    command: str
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -215,18 +218,48 @@ def run_audit(req: AuditRequest):
 
         # Kickoff the crew execution
         result = inventory_crew.kickoff(inputs={"query": query_str})
+        raw_result = getattr(result, 'raw', str(result))
         
         # Save output to report.md
         report_path = os.path.join(os.path.dirname(__file__), "report.md")
         with open(report_path, "w", encoding="utf-8") as f:
-            f.write(result)
+            f.write(raw_result)
 
         return {
             "status": "success",
-            "report": result
+            "report": raw_result
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent audit failed: {str(e)}")
+
+@app.post("/api/run-command")
+def run_command(req: CommandRequest):
+    """Executes the database administrator agent squad to run natural language database modifications."""
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_api_key or openai_api_key == "your_openai_api_key_here":
+        raise HTTPException(
+            status_code=400, 
+            detail="OpenAI API Key is not configured. Please set a valid OPENAI_API_KEY in the backend/.env file."
+        )
+
+    try:
+        # Assemble the Crew for execution
+        command_crew = Crew(
+            agents=[command_agent],
+            tasks=[command_task],
+            verbose=True
+        )
+
+        # Kickoff command execution
+        result = command_crew.kickoff(inputs={"command": req.command})
+        raw_result = getattr(result, 'raw', str(result))
+        
+        return {
+            "status": "success",
+            "result": raw_result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent command execution failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

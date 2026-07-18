@@ -50,3 +50,23 @@ def run_db_query(sql_query: str) -> str:
 def get_system_date() -> str:
     """Returns the simulated current date of the inventory system to compare with product expiry dates."""
     return os.environ.get("SIMULATED_CURRENT_DATE", "2026-07-16")
+
+@tool("Run Database Modification Query")
+def run_db_modify_query(sql_query: str) -> str:
+    """Executes an INSERT, UPDATE, or DELETE query on the SQLite database and commits the transaction.
+    Input should be a valid SQL statement starting with INSERT, UPDATE, or DELETE.
+    """
+    query_lower = sql_query.strip().lower()
+    if not any(query_lower.startswith(kw) for kw in ["insert", "update", "delete"]):
+        return "Error: Only INSERT, UPDATE, or DELETE statements are allowed. Do not use SELECT or DROP statements."
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(sql_query)
+        conn.commit()
+        affected = cursor.rowcount
+        conn.close()
+        return f"Success: Query executed. Affected rows: {affected}"
+    except Exception as e:
+        return f"Error executing write query: {str(e)}"

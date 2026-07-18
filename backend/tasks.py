@@ -1,5 +1,5 @@
 from crewai import Task
-from agents import interface_agent, sql_agent, alerts_agent, analysis_agent
+from agents import interface_agent, sql_agent, alerts_agent, analysis_agent, command_agent
 
 # 1. SQL Query Task (SQL Agent)
 sql_query_task = Task(
@@ -86,3 +86,27 @@ interface_task = Task(
     agent=interface_agent,
     context=[sql_query_task, alerts_task, analysis_task]
 )
+
+# 5. Database Command Execution Task (Command Agent)
+command_task = Task(
+    description=(
+        "1. Inspect the database schema of 'inventory.db' using the schema tool to understand existing tables, columns, and relationships.\n"
+        "2. Analyze the natural language operator command: '{command}'\n"
+        "3. STRICT RULE: You must NEVER insert, update, or delete rows in the 'stores' table under any circumstances. The set of stores is fixed and static:\n"
+        "   - store_id 1: 'Dubai Marina' (matches inputs like 'dubai', 'dubai marina', 'marina')\n"
+        "   - store_id 2: 'Downtown Dubai' (matches inputs like 'downtown', 'downtown dubai')\n"
+        "   - store_id 3: 'Sharjah Al Nahda' (matches inputs like 'sharjah', 'al nahda', 'sharjah branch')\n"
+        "   Always map any branch references in the command to one of these three store_ids. Do not create new stores.\n"
+        "4. STRICT RULE: Before inserting a product, query the 'products' table (case-insensitively or with LIKE) to see if it already exists. If the product exists, reuse its product_id. Do not insert a duplicate product row.\n"
+        "5. STRICT RULE: If the request is to add stock, reduce stock, increase stock, or set stock levels for an existing product/store combination, write an UPDATE on 'store_inventory' (e.g. UPDATE store_inventory SET stock_level = ? WHERE store_id = ? AND product_id = ?) rather than inserting a new row. Do not cause primary key violations.\n"
+        "6. Execute the SQL queries using the database modification tool.\n"
+        "7. Verify that the changes succeeded (e.g. write a select query to check the updated row values).\n"
+        "8. Provide a clean, human-friendly operations summary in markdown. Do not include raw SQL statement logs in the final response. Instead, write a polished summary showing: \n"
+        "   - A success text message (e.g. 'Successfully updated stock of Cadbury Dairy Milk in Dubai Marina to 11')\n"
+        "   - A clean markdown table detailing the changes (e.g. Columns: Product, Branch, Attribute changed, Old Value, New Value).\n"
+        "   - Ensure the output looks professional and clear for a supermarket manager."
+    ),
+    expected_output="A polished, human-friendly markdown summary table detailing the successful database modifications.",
+    agent=command_agent
+)
+
