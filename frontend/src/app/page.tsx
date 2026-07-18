@@ -16,7 +16,12 @@ import {
   MapPin,
   Calendar,
   AlertOctagon,
-  ChevronRight
+  ChevronRight,
+  Edit2,
+  Trash2,
+  Plus,
+  X,
+  Check
 } from "lucide-react";
 
 interface Store {
@@ -87,6 +92,30 @@ export default function Home() {
   const [commandLogs, setCommandLogs] = useState<string[]>([]);
   const [commandResult, setCommandResult] = useState<string | null>(null);
 
+  // Manual Inventory CRUD states
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null); // "storeId-productId"
+  const [editForm, setEditForm] = useState<{
+    stock_level: number;
+    reorder_threshold: number;
+    expiry_date: string;
+  } | null>(null);
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newProductForm, setNewProductForm] = useState({
+    product_name: "",
+    category: "",
+    price_aed: "",
+    store_id: "",
+    stock_level: "",
+    reorder_threshold: "",
+    expiry_date: "2026-07-20"
+  });
+
+  const [crudError, setCrudError] = useState<string | null>(null);
+  const [crudSuccess, setCrudSuccess] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<any[]>([]);
+
   // Load active inventory data
   const fetchData = async () => {
     try {
@@ -104,8 +133,41 @@ export default function Home() {
     }
   };
 
+  // Load active watchdog alerts from SQLite
+  const fetchAlerts = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/alerts");
+      if (!res.ok) throw new Error("Failed to fetch alerts.");
+      const json = await res.json();
+      setAlerts(json.alerts || []);
+    } catch (err: any) {
+      console.error("Alerts fetch error:", err.message);
+    }
+  };
+
+  // Dismiss an active alert
+  const handleDismissAlert = async (alertId: number) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/alerts/dismiss/${alertId}`, {
+        method: "POST"
+      });
+      if (!res.ok) throw new Error("Failed to dismiss alert.");
+      
+      setAlerts(prev => prev.filter(a => a.id !== alertId));
+    } catch (err: any) {
+      console.error("Dismiss alert error:", err.message);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchAlerts();
+
+    const interval = setInterval(() => {
+      fetchAlerts();
+    }, 10000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Update a single business rule
@@ -258,6 +320,132 @@ export default function Home() {
       setCommandLogs(prev => [...prev, `[Error] ${err.message}`]);
     } finally {
       setCommandRunning(false);
+    }
+  };
+
+  // Start inline editing of a row
+  const handleStartEdit = (item: InventoryItem) => {
+    setEditingKey(`${item.store_id}-${item.product_id}`);
+    setEditForm({
+      stock_level: item.stock_level,
+      reorder_threshold: item.reorder_threshold,
+      expiry_date: item.expiry_date
+    });
+    setCrudError(null);
+    setCrudSuccess(null);
+  };
+
+  // Cancel inline editing
+  const handleCancelEdit = () => {
+    setEditingKey(null);
+    setEditForm(null);
+  };
+
+  // Save inline editing changes
+  const handleSaveEdit = async (storeId: number, productId: number) => {
+    if (!editForm) return;
+    try {
+      setCrudError(null);
+      setCrudSuccess(null);
+      const res = await fetch("http://localhost:8000/api/inventory/update", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: storeId,
+          product_id: productId,
+          stock_level: editForm.stock_level,
+          reorder_threshold: editForm.reorder_threshold,
+          expiry_date: editForm.expiry_date
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to update inventory.");
+
+      setCrudSuccess("Inventory row updated successfully!");
+      setEditingKey(null);
+      setEditForm(null);
+      fetchData(); // Sync display values
+    } catch (err: any) {
+      setCrudError(err.message || "An error occurred.");
+    }
+  };
+
+  // Delete an item from branch inventory
+  const handleDeleteInventory = async (storeId: number, productId: number) => {
+    if (!window.confirm("Are you sure you want to remove this product from this branch inventory?")) return;
+    try {
+      setCrudError(null);
+      setCrudSuccess(null);
+      const res = await fetch("http://localhost:8000/api/inventory/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: storeId,
+          product_id: productId
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to delete inventory item.");
+
+      setCrudSuccess("Product removed from branch inventory.");
+      fetchData(); // Sync display values
+    } catch (err: any) {
+      setCrudError(err.message || "An error occurred.");
+    }
+  };
+
+  // Add a product to store inventory manually
+  const handleAddProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !newProductForm.product_name ||
+      !newProductForm.category ||
+      !newProductForm.price_aed ||
+      !newProductForm.store_id ||
+      !newProductForm.stock_level ||
+      !newProductForm.reorder_threshold ||
+      !newProductForm.expiry_date
+    ) {
+      setCrudError("Please fill out all fields.");
+      return;
+    }
+
+    try {
+      setCrudError(null);
+      setCrudSuccess(null);
+      const res = await fetch("http://localhost:8000/api/inventory/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product_name: newProductForm.product_name,
+          category: newProductForm.category,
+          price_aed: parseFloat(newProductForm.price_aed),
+          store_id: parseInt(newProductForm.store_id),
+          stock_level: parseInt(newProductForm.stock_level),
+          reorder_threshold: parseInt(newProductForm.reorder_threshold),
+          expiry_date: newProductForm.expiry_date
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to add product to inventory.");
+
+      setCrudSuccess("Product successfully added to inventory!");
+      setShowAddModal(false);
+      setNewProductForm({
+        product_name: "",
+        category: "",
+        price_aed: "",
+        store_id: "",
+        stock_level: "",
+        reorder_threshold: "",
+        expiry_date: "2026-07-20"
+      });
+      fetchData(); // Sync display values
+    } catch (err: any) {
+      setCrudError(err.message || "An error occurred.");
     }
   };
 
@@ -566,6 +754,36 @@ export default function Home() {
           </div>
         </header>
 
+        {/* Proactive Audit Alerts Banner */}
+        {alerts && alerts.length > 0 && (
+          <section className="alerts-banner-card">
+            <div className="alerts-banner-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertOctagon size={18} style={{ color: '#dd5e56' }} />
+                <h4 style={{ margin: 0, fontWeight: 600, color: '#ffffff', fontSize: '0.95rem' }}>Proactive Audit Alerts ({alerts.length})</h4>
+              </div>
+              <span className="badge badge-red animate-pulse" style={{ fontSize: '0.72rem' }}>Live Watchdog Active</span>
+            </div>
+            
+            <div className="alerts-banner-list">
+              {alerts.map(alert => (
+                <div key={alert.id} className="alerts-banner-item">
+                  <div className="alerts-banner-text">
+                    <span className={`alert-indicator ${alert.alert_type}`}></span>
+                    <p style={{ margin: 0 }}>{alert.message}</p>
+                  </div>
+                  <button 
+                    onClick={() => handleDismissAlert(alert.id)}
+                    className="dismiss-alert-btn"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Stats Grid */}
         <section className="stats-grid">
           {/* Stat Card: Alerts */}
@@ -612,10 +830,42 @@ export default function Home() {
               <Package size={20} style={{ color: "#c3b189" }} />
               <h3>{currentBranchName} Inventory Audit</h3>
             </div>
-            <button onClick={fetchData} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>
-              <RefreshCw size={12} /> Sync SQLite
-            </button>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button 
+                onClick={() => {
+                  setIsEditMode(!isEditMode);
+                  setEditingKey(null);
+                }}
+                className={`btn-secondary ${isEditMode ? "active-manage" : ""}`}
+                style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <Settings2 size={12} /> {isEditMode ? "Exit Edit Mode" : "Manage Inventory"}
+              </button>
+              {isEditMode && (
+                <button 
+                  onClick={() => setShowAddModal(true)}
+                  className="btn-primary"
+                  style={{ padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Plus size={12} /> Add Product
+                </button>
+              )}
+              <button onClick={fetchData} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>
+                <RefreshCw size={12} /> Sync SQLite
+              </button>
+            </div>
           </div>
+
+          {crudError && (
+            <div className="alert-message error" style={{ margin: '12px 24px' }}>
+              {crudError}
+            </div>
+          )}
+          {crudSuccess && (
+            <div className="alert-message success" style={{ margin: '12px 24px' }}>
+              {crudSuccess}
+            </div>
+          )}
 
           <div className="overflow-x-auto" style={{ overflowX: 'auto' }}>
             <table className="custom-table">
@@ -629,10 +879,13 @@ export default function Home() {
                   <th>Expiry Date</th>
                   <th>Price (AED)</th>
                   <th>Audit Tags</th>
+                  {isEditMode && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {filteredInventory.map((item, idx) => {
+                  const key = `${item.store_id}-${item.product_id}`;
+                  const isEditing = editingKey === key;
                   const isLow = item.stock_level <= item.reorder_threshold;
                   const isExp = isNearExpiry(item.expiry_date, parseInt(data.rules.near_expiry_days_threshold || "3"));
                   
@@ -641,18 +894,59 @@ export default function Home() {
                       <td className="font-medium" style={{ color: '#ffffff', fontWeight: 500 }}>{item.product_name}</td>
                       <td><span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.category}</span></td>
                       {selectedStoreId === null && <td className="text-muted" style={{ fontSize: '0.85rem' }}>{item.store_name}</td>}
+                      
+                      {/* Stock level cell */}
                       <td>
-                        <span style={isLow ? { color: '#dd5e56', fontWeight: 700 } : { color: '#ffffff', fontWeight: 500 }}>
-                          {item.stock_level}
-                        </span>
+                        {isEditing ? (
+                          <input 
+                            type="number"
+                            className="crud-input"
+                            value={editForm?.stock_level ?? 0}
+                            onChange={e => setEditForm(prev => prev ? { ...prev, stock_level: parseInt(e.target.value) || 0 } : null)}
+                            style={{ width: '80px', padding: '4px 8px' }}
+                          />
+                        ) : (
+                          <span style={isLow ? { color: '#dd5e56', fontWeight: 700 } : { color: '#ffffff', fontWeight: 500 }}>
+                            {item.stock_level}
+                          </span>
+                        )}
                       </td>
-                      <td className="text-muted" style={{ fontSize: '0.85rem' }}>{item.reorder_threshold}</td>
+                      
+                      {/* Threshold cell */}
                       <td>
-                        <span style={isExp ? { color: '#e69d30', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' } : { color: '#8c96a8', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                          <Calendar size={13} />
-                          {item.expiry_date}
-                        </span>
+                        {isEditing ? (
+                          <input 
+                            type="number"
+                            className="crud-input"
+                            value={editForm?.reorder_threshold ?? 0}
+                            onChange={e => setEditForm(prev => prev ? { ...prev, reorder_threshold: parseInt(e.target.value) || 0 } : null)}
+                            style={{ width: '80px', padding: '4px 8px' }}
+                          />
+                        ) : (
+                          <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+                            {item.reorder_threshold}
+                          </span>
+                        )}
                       </td>
+
+                      {/* Expiry cell */}
+                      <td>
+                        {isEditing ? (
+                          <input 
+                            type="date"
+                            className="crud-input"
+                            value={editForm?.expiry_date || ""}
+                            onChange={e => setEditForm(prev => prev ? { ...prev, expiry_date: e.target.value } : null)}
+                            style={{ width: '130px', padding: '4px 8px', fontSize: '0.8rem' }}
+                          />
+                        ) : (
+                          <span style={isExp ? { color: '#e69d30', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' } : { color: '#8c96a8', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+                            <Calendar size={13} />
+                            {item.expiry_date}
+                          </span>
+                        )}
+                      </td>
+                      
                       <td style={{ fontWeight: 600 }}>{item.price_aed.toFixed(2)}</td>
                       <td>
                         <div style={{ display: 'flex', gap: '8px' }}>
@@ -661,6 +955,47 @@ export default function Home() {
                           {!isLow && !isExp && <span className="badge badge-green">Safe</span>}
                         </div>
                       </td>
+
+                      {/* Actions cell */}
+                      {isEditMode && (
+                        <td>
+                          {isEditing ? (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button 
+                                onClick={() => handleSaveEdit(item.store_id, item.product_id)} 
+                                className="action-icon-btn save-btn"
+                                title="Save changes"
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button 
+                                onClick={handleCancelEdit} 
+                                className="action-icon-btn cancel-btn"
+                                title="Cancel"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button 
+                                onClick={() => handleStartEdit(item)} 
+                                className="action-icon-btn edit-btn"
+                                title="Edit item"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteInventory(item.store_id, item.product_id)} 
+                                className="action-icon-btn delete-btn"
+                                title="Delete from branch"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -910,6 +1245,129 @@ export default function Home() {
         )}
 
       </main>
+
+      {/* Add Product Modal */}
+      {showAddModal && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <div className="modal-header">
+              <h3>Add Product to Branch Inventory</h3>
+              <button onClick={() => setShowAddModal(false)} className="close-modal-btn">
+                <X size={18} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleAddProduct} className="modal-form">
+              <div className="form-group">
+                <label className="form-label">Product Name</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Al Ain Apple Juice 1L" 
+                  value={newProductForm.product_name}
+                  onChange={e => setNewProductForm(prev => ({ ...prev, product_name: e.target.value }))}
+                  required
+                  className="crud-input"
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Category</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Beverages" 
+                    value={newProductForm.category}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, category: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Price (AED)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    placeholder="e.g. 5.50" 
+                    value={newProductForm.price_aed}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, price_aed: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Destination Store</label>
+                  <select 
+                    value={newProductForm.store_id}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, store_id: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%', padding: '8px 12px' }}
+                  >
+                    <option value="">Select Branch...</option>
+                    {data.stores.map(store => (
+                      <option key={store.id} value={store.id}>{store.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Stock Level</label>
+                  <input 
+                    type="number" 
+                    placeholder="e.g. 50" 
+                    value={newProductForm.stock_level}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, stock_level: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Reorder Threshold</label>
+                  <input 
+                    type="number" 
+                    placeholder="e.g. 10" 
+                    value={newProductForm.reorder_threshold}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, reorder_threshold: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Expiry Date</label>
+                  <input 
+                    type="date" 
+                    value={newProductForm.expiry_date}
+                    onChange={e => setNewProductForm(prev => ({ ...prev, expiry_date: e.target.value }))}
+                    required
+                    className="crud-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
+                <button type="button" onClick={() => setShowAddModal(false)} className="btn-secondary" style={{ padding: '8px 16px' }}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" style={{ padding: '8px 16px' }}>
+                  Add Product
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

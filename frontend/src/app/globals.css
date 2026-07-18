@@ -871,3 +871,254 @@ h1, h2, h3, h4, h5, h6 {
   background: rgba(195, 177, 137, 0.1);
   font-weight: 600;
 }
+
+/* Active Management Mode Button */
+.btn-secondary.active-manage {
+  background: var(--accent-gold);
+  color: #0b0d13;
+  border-color: var(--accent-gold);
+}
+
+.btn-secondary.active-manage:hover {
+  background: #b2a079;
+}
+
+/* CRUD Custom Inputs */
+.crud-input {
+  background: #191d29;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: #ffffff;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-family: var(--font-sans);
+  transition: border-color 0.2s ease;
+}
+
+.crud-input:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+}
+
+/* Action Icon Buttons */
+.action-icon-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8c96a8;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.action-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.action-icon-btn.save-btn {
+  color: var(--status-green);
+  border-color: rgba(27, 165, 107, 0.3);
+}
+
+.action-icon-btn.save-btn:hover {
+  background: rgba(27, 165, 107, 0.1);
+  color: #ffffff;
+}
+
+.action-icon-btn.cancel-btn {
+  color: #8c96a8;
+}
+
+.action-icon-btn.edit-btn:hover {
+  color: var(--accent-gold);
+  border-color: rgba(195, 177, 137, 0.3);
+  background: rgba(195, 177, 137, 0.05);
+}
+
+.action-icon-btn.delete-btn {
+  color: var(--status-red);
+  border-color: rgba(221, 94, 86, 0.3);
+}
+
+.action-icon-btn.delete-btn:hover {
+  background: rgba(221, 94, 86, 0.1);
+  color: #ffffff;
+}
+
+/* Modal Styling */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(11, 13, 19, 0.85);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease;
+}
+
+.modal-card {
+  background: rgba(18, 20, 26, 0.95);
+  border: 1px solid rgba(195, 177, 137, 0.25);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 550px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 24px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--card-border);
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+.modal-header h3 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--accent-gold);
+}
+
+.close-modal-btn {
+  background: transparent;
+  border: none;
+  color: #8c96a8;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.close-modal-btn:hover {
+  color: #ffffff;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8c96a8;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Watchdog Alerts Banner Styling */
+.alerts-banner-card {
+  background: rgba(221, 94, 86, 0.05);
+  border: 1px solid rgba(221, 94, 86, 0.25);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 24px;
+  backdrop-filter: blur(10px);
+}
+
+.alerts-banner-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(221, 94, 86, 0.15);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.alerts-banner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.alerts-banner-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(18, 20, 26, 0.6);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  transition: all 0.2s ease;
+}
+
+.alerts-banner-item:hover {
+  border-color: rgba(221, 94, 86, 0.3);
+  background: rgba(18, 20, 26, 0.85);
+}
+
+.alerts-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c9d1d9;
+}
+
+.alert-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.alert-indicator.low_stock {
+  background: var(--status-red);
+  box-shadow: 0 0 8px var(--status-red);
+}
+
+.alert-indicator.near_expiry {
+  background: var(--status-amber);
+  box-shadow: 0 0 8px var(--status-amber);
+}
+
+.dismiss-alert-btn {
+  background: transparent;
+  border: none;
+  color: #8c96a8;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.dismiss-alert-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}

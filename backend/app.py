@@ -1,5 +1,8 @@
 import os
 import sqlite3
+import threading
+import time
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,6 +26,106 @@ app.add_middleware(
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "inventory.db")
 
+def run_inventory_audit():
+    """Background loop that evaluates stock levels and expiry dates every 15 seconds."""
+    while True:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 1. Fetch rules
+            cursor.execute("SELECT key, value FROM business_rules")
+            rules = {row['key']: row['value'] for row in cursor.fetchall()}
+            near_expiry_days = int(rules.get('near_expiry_days_threshold', 3))
+            
+            # 2. Get low-stock items
+            cursor.execute("""
+                SELECT si.store_id, si.product_id, p.name as product_name, s.name as store_name, si.stock_level, si.reorder_threshold
+                FROM store_inventory si
+                JOIN products p ON si.product_id = p.id
+                JOIN stores s ON si.store_id = s.id
+                WHERE si.stock_level <= si.reorder_threshold
+            """)
+            low_stock_items = cursor.fetchall()
+            
+            # 3. Get near-expiry items
+            # System date is simulated as '2026-07-16' in this codebase
+            cursor.execute("""
+                SELECT si.store_id, si.product_id, p.name as product_name, s.name as store_name, si.expiry_date
+                FROM store_inventory si
+                JOIN products p ON si.product_id = p.id
+                JOIN stores s ON si.store_id = s.id
+            """)
+            all_items = cursor.fetchall()
+            
+            near_expiry_items = []
+            system_date = datetime.strptime("2026-07-16", "%Y-%m-%d")
+            for item in all_items:
+                try:
+                    expiry_date = datetime.strptime(item['expiry_date'], "%Y-%m-%d")
+                    days_diff = (expiry_date - system_date).days
+                    if 0 <= days_diff <= near_expiry_days:
+                        near_expiry_items.append(item)
+                except Exception:
+                    continue
+            
+            # 4. Get currently dismissed alert keys so we don't recreate them immediately
+            cursor.execute("SELECT store_id, product_id, alert_type FROM inventory_alerts WHERE status = 'dismissed'")
+            dismissed = {(row['store_id'], row['product_id'], row['alert_type']) for row in cursor.fetchall()}
+            
+            # 5. Clear all 'active' alerts
+            cursor.execute("DELETE FROM inventory_alerts WHERE status = 'active'")
+            
+            # 6. Insert new active alerts (if they weren't dismissed previously)
+            for item in low_stock_items:
+                key = (item['store_id'], item['product_id'], 'low_stock')
+                if key not in dismissed:
+                    msg = f"Low Stock: {item['product_name']} has only {item['stock_level']} left at {item['store_name']} (Threshold: {item['reorder_threshold']})."
+                    cursor.execute(
+                        "INSERT INTO inventory_alerts (product_id, store_id, alert_type, message, status) VALUES (?, ?, ?, ?, ?)",
+                        (item['product_id'], item['store_id'], 'low_stock', msg, 'active')
+                    )
+                    
+            for item in near_expiry_items:
+                key = (item['store_id'], item['product_id'], 'near_expiry')
+                if key not in dismissed:
+                    msg = f"Near Expiry: {item['product_name']} expires on {item['expiry_date']} at {item['store_name']}."
+                    cursor.execute(
+                        "INSERT INTO inventory_alerts (product_id, store_id, alert_type, message, status) VALUES (?, ?, ?, ?, ?)",
+                        (item['product_id'], item['store_id'], 'near_expiry', msg, 'active')
+                    )
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error in background inventory audit: {e}")
+            
+        time.sleep(15)
+
+@app.on_event("startup")
+def startup_event():
+    # Create inventory_alerts table if not exists
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS inventory_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            store_id INTEGER,
+            alert_type TEXT,
+            message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'active'
+        )
+    """)
+    conn.commit()
+    conn.close()
+    
+    # Start background thread
+    audit_thread = threading.Thread(target=run_inventory_audit, daemon=True)
+    audit_thread.start()
+
 class RuleUpdate(BaseModel):
     key: str
     value: str
@@ -38,6 +141,26 @@ class AuditRequest(BaseModel):
 
 class CommandRequest(BaseModel):
     command: str
+
+class InventoryUpdate(BaseModel):
+    store_id: int
+    product_id: int
+    stock_level: int
+    reorder_threshold: int
+    expiry_date: str
+
+class InventoryAdd(BaseModel):
+    product_name: str
+    category: str
+    price_aed: float
+    store_id: int
+    stock_level: int
+    reorder_threshold: int
+    expiry_date: str
+
+class InventoryDelete(BaseModel):
+    store_id: int
+    product_id: int
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -260,6 +383,145 @@ def run_command(req: CommandRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent command execution failed: {str(e)}")
+
+@app.put("/api/inventory/update")
+def update_inventory_item(item: InventoryUpdate):
+    """Updates an existing inventory item in the store_inventory table."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if record exists
+        cursor.execute(
+            "SELECT * FROM store_inventory WHERE store_id = ? AND product_id = ?",
+            (item.store_id, item.product_id)
+        )
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Inventory record not found.")
+
+        # Update
+        cursor.execute(
+            """
+            UPDATE store_inventory 
+            SET stock_level = ?, reorder_threshold = ?, expiry_date = ? 
+            WHERE store_id = ? AND product_id = ?
+            """,
+            (item.stock_level, item.reorder_threshold, item.expiry_date, item.store_id, item.product_id)
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "Inventory level updated successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/inventory/add")
+def add_inventory_item(item: InventoryAdd):
+    """Adds a product (inserts into products if new) and adds it to the store inventory."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. Check if product already exists (case-insensitive check)
+        cursor.execute(
+            "SELECT id FROM products WHERE LOWER(name) = LOWER(?)",
+            (item.product_name.strip(),)
+        )
+        row = cursor.fetchone()
+        if row:
+            product_id = row['id']
+        else:
+            # Insert product
+            cursor.execute(
+                "INSERT INTO products (name, category, price_aed) VALUES (?, ?, ?)",
+                (item.product_name.strip(), item.category.strip(), item.price_aed)
+            )
+            product_id = cursor.lastrowid
+            
+        # 2. Add or update store inventory entry
+        cursor.execute(
+            "SELECT * FROM store_inventory WHERE store_id = ? AND product_id = ?",
+            (item.store_id, product_id)
+        )
+        inv_row = cursor.fetchone()
+        if inv_row:
+            # Update existing
+            cursor.execute(
+                """
+                UPDATE store_inventory 
+                SET stock_level = stock_level + ?, reorder_threshold = ?, expiry_date = ? 
+                WHERE store_id = ? AND product_id = ?
+                """,
+                (item.stock_level, item.reorder_threshold, item.expiry_date, item.store_id, product_id)
+            )
+        else:
+            # Insert new store inventory item
+            cursor.execute(
+                """
+                INSERT INTO store_inventory (store_id, product_id, stock_level, reorder_threshold, expiry_date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (item.store_id, product_id, item.stock_level, item.reorder_threshold, item.expiry_date)
+            )
+            
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "Product successfully added/updated in branch inventory."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/inventory/delete")
+def delete_inventory_item(item: InventoryDelete):
+    """Deletes an item from the store_inventory table for a specific store."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "DELETE FROM store_inventory WHERE store_id = ? AND product_id = ?",
+            (item.store_id, item.product_id)
+        )
+        
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "Product removed from branch inventory successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/alerts")
+def get_active_alerts():
+    """Retrieves all active alerts from the inventory_alerts table."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ia.id, ia.alert_type, ia.message, ia.created_at, ia.store_id, ia.product_id, s.name as store_name
+            FROM inventory_alerts ia
+            LEFT JOIN stores s ON ia.store_id = s.id
+            WHERE ia.status = 'active'
+            ORDER BY ia.created_at DESC
+        """)
+        alerts = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {"status": "success", "alerts": alerts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/alerts/dismiss/{alert_id}")
+def dismiss_alert(alert_id: int):
+    """Marks an alert as dismissed so it won't be shown anymore."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE inventory_alerts SET status = 'dismissed' WHERE id = ?",
+            (alert_id,)
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": f"Alert {alert_id} marked as dismissed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
