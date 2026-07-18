@@ -119,6 +119,21 @@ def startup_event():
             status TEXT DEFAULT 'active'
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transfer_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_store_id INTEGER,
+            to_store_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            status TEXT DEFAULT 'Pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(from_store_id) REFERENCES stores(id),
+            FOREIGN KEY(to_store_id) REFERENCES stores(id),
+            FOREIGN KEY(product_id) REFERENCES products(id)
+        )
+    """)
     conn.commit()
     conn.close()
     
@@ -141,6 +156,21 @@ class AuditRequest(BaseModel):
 
 class CommandRequest(BaseModel):
     command: str
+
+class TransferStatusUpdate(BaseModel):
+    request_id: int
+    status: str
+
+class LoginRequest(BaseModel):
+    branch: str
+    password: str
+
+BRANCH_CREDENTIALS = {
+    "HQ": "inventorymanagerHQ",
+    "Dubai": "inventorymanagerMARINA",
+    "Downtown": "inventorymanagerDOWNTOWN",
+    "Sharjah": "inventorymanagerSHARJAH",
+}
 
 class InventoryUpdate(BaseModel):
     store_id: int
@@ -166,6 +196,20 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+@app.post("/api/login")
+def login(req: LoginRequest):
+    """Validates branch credentials and returns role info."""
+    expected = BRANCH_CREDENTIALS.get(req.branch)
+    if not expected or req.password != expected:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    
+    store_id_map = {"HQ": None, "Dubai": 1, "Downtown": 2, "Sharjah": 3}
+    return {
+        "status": "success",
+        "role": req.branch,
+        "store_id": store_id_map.get(req.branch),
+    }
 
 @app.get("/api/inventory")
 def get_inventory():
@@ -520,6 +564,114 @@ def dismiss_alert(alert_id: int):
         conn.commit()
         conn.close()
         return {"status": "success", "message": f"Alert {alert_id} marked as dismissed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/transfers")
+def get_transfers():
+    """Retrieves all transfer requests joined with store and product names."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tr.id, tr.from_store_id, tr.to_store_id, tr.product_id, tr.quantity, tr.status, tr.created_at,
+                   sf.name as from_store_name, st.name as to_store_name, p.name as product_name
+            FROM transfer_requests tr
+            JOIN stores sf ON tr.from_store_id = sf.id
+            JOIN stores st ON tr.to_store_id = st.id
+            JOIN products p ON tr.product_id = p.id
+            ORDER BY tr.created_at DESC
+        """)
+        transfers = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {"status": "success", "transfers": transfers}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transfers/create")
+def create_transfer_request(transfer: StockTransfer):
+    """Logs a new transfer request in Pending state."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO transfer_requests (from_store_id, to_store_id, product_id, quantity, status)
+            VALUES (?, ?, ?, ?, 'Pending')
+            """,
+            (transfer.from_store_id, transfer.to_store_id, transfer.product_id, transfer.quantity)
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "Transfer request created in status Pending."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transfers/update-status")
+def update_transfer_status(req: TransferStatusUpdate):
+    """Updates status. If Completed, updates stock inventory levels in SQLite."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT * FROM transfer_requests WHERE id = ?",
+            (req.request_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Transfer request not found.")
+            
+        transfer = dict(row)
+        
+        if req.status == 'Sent':
+            # Deduct from source store inventory immediately when shipped/dispatched
+            cursor.execute(
+                "UPDATE store_inventory SET stock_level = stock_level - ? WHERE store_id = ? AND product_id = ?",
+                (transfer['quantity'], transfer['from_store_id'], transfer['product_id'])
+            )
+        elif req.status == 'Completed':
+            # Add to destination store inventory only when received/completed
+            cursor.execute(
+                "UPDATE store_inventory SET stock_level = stock_level + ? WHERE store_id = ? AND product_id = ?",
+                (transfer['quantity'], transfer['to_store_id'], transfer['product_id'])
+            )
+        elif req.status == 'Cancelled':
+            # If the transfer was already shipped (Sent) and gets cancelled, return stock to the source store
+            if transfer['status'] == 'Sent':
+                cursor.execute(
+                    "UPDATE store_inventory SET stock_level = stock_level + ? WHERE store_id = ? AND product_id = ?",
+                    (transfer['quantity'], transfer['from_store_id'], transfer['product_id'])
+                )
+            
+            # Fetch names for cancellation notification message
+            cursor.execute("SELECT name FROM stores WHERE id = ?", (transfer['from_store_id'],))
+            from_row = cursor.fetchone()
+            from_name = from_row['name'] if from_row else f"Store #{transfer['from_store_id']}"
+
+            cursor.execute("SELECT name FROM products WHERE id = ?", (transfer['product_id'],))
+            p_row = cursor.fetchone()
+            p_name = p_row['name'] if p_row else f"Product #{transfer['product_id']}"
+
+            # Post notification alert to destination store (branch in deficit)
+            cursor.execute("""
+                INSERT INTO inventory_alerts (product_id, store_id, alert_type, message, status)
+                VALUES (?, ?, 'low_stock', ?, 'active')
+            """, (
+                transfer['product_id'],
+                transfer['to_store_id'],
+                f"Transfer Cancelled: {from_name} cancelled stock transfer of {transfer['quantity']} units of {p_name}."
+            ))
+        
+        cursor.execute(
+            "UPDATE transfer_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (req.status, req.request_id)
+        )
+        
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": f"Transfer status updated to {req.status} successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

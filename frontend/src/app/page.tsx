@@ -21,7 +21,8 @@ import {
   Trash2,
   Plus,
   X,
-  Check
+  Check,
+  Bell
 } from "lucide-react";
 
 interface Store {
@@ -115,6 +116,50 @@ export default function Home() {
   const [crudError, setCrudError] = useState<string | null>(null);
   const [crudSuccess, setCrudSuccess] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [transfers, setTransfers] = useState<any[]>([]);
+
+  // Auth / Login states
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userRole, setUserRole] = useState<"HQ" | "Dubai" | "Downtown" | "Sharjah">("HQ");
+  const [loginBranch, setLoginBranch] = useState<string>("HQ");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  // Login handler
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    setLoginLoading(true);
+    try {
+      const res = await fetch("http://localhost:8000/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch: loginBranch, password: loginPassword }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Invalid credentials.");
+      
+      setUserRole(json.role as "HQ" | "Dubai" | "Downtown" | "Sharjah");
+      setSelectedStoreId(json.store_id);
+      setIsLoggedIn(true);
+      setLoginPassword("");
+    } catch (err: any) {
+      setLoginError(err.message || "Login failed.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // Logout handler
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setUserRole("HQ");
+    setSelectedStoreId(null);
+    setLoginPassword("");
+    setLoginError(null);
+  };
 
   // Load active inventory data
   const fetchData = async () => {
@@ -126,6 +171,7 @@ export default function Home() {
       setData(json);
       setEditRules(json.rules);
       setError(null);
+      fetchTransfers();
     } catch (err: any) {
       setError(err.message || "Failed to fetch data.");
     } finally {
@@ -142,6 +188,18 @@ export default function Home() {
       setAlerts(json.alerts || []);
     } catch (err: any) {
       console.error("Alerts fetch error:", err.message);
+    }
+  };
+
+  // Load active transfer requests from SQLite
+  const fetchTransfers = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/transfers");
+      if (!res.ok) throw new Error("Failed to fetch transfer requests.");
+      const json = await res.json();
+      setTransfers(json.transfers || []);
+    } catch (err: any) {
+      console.error("Transfers fetch error:", err.message);
     }
   };
 
@@ -162,9 +220,11 @@ export default function Home() {
   useEffect(() => {
     fetchData();
     fetchAlerts();
+    fetchTransfers();
 
     const interval = setInterval(() => {
       fetchAlerts();
+      fetchTransfers();
     }, 10000);
 
     return () => clearInterval(interval);
@@ -196,11 +256,11 @@ export default function Home() {
     }
   };
 
-  // Run stock transfer
+  // Run stock transfer (Creates a Pending request in SQLite)
   const handleExecuteTransfer = async (fromId: number, toId: number, pId: number, qty: number) => {
     try {
       setTransferMessage(null);
-      const res = await fetch("http://localhost:8000/api/transfer", {
+      const res = await fetch("http://localhost:8000/api/transfers/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -212,12 +272,35 @@ export default function Home() {
       });
       
       const json = await res.json();
-      if (!res.ok) throw new Error(json.detail || "Transfer execution failed.");
+      if (!res.ok) throw new Error(json.detail || "Transfer request creation failed.");
       
-      setTransferMessage({ type: "success", text: json.message });
-      fetchData(); // reload inventory values
+      setTransferMessage({ type: "success", text: "Inter-branch transfer request logged successfully (Status: Pending)." });
+      fetchData(); // Sync logs and counts
     } catch (err: any) {
       setTransferMessage({ type: "error", text: err.message });
+    }
+  };
+
+  // Update status of a transfer request (Ship / Complete / Cancel)
+  const handleUpdateTransferStatus = async (requestId: number, newStatus: string) => {
+    try {
+      setTransferMessage(null);
+      const res = await fetch("http://localhost:8000/api/transfers/update-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_id: requestId,
+          status: newStatus
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to update transfer status.");
+
+      setTransferMessage({ type: "success", text: `Transfer status successfully updated to: ${newStatus}` });
+      fetchData(); // Reload inventory lists and request streams
+    } catch (err: any) {
+      setTransferMessage({ type: "error", text: err.message || "Status update failed." });
     }
   };
 
@@ -567,6 +650,78 @@ export default function Home() {
     };
   };
 
+  // Login Screen Gate
+  if (!isLoggedIn) {
+    return (
+      <div className="login-screen">
+        <div className="login-backdrop"></div>
+        <div className="login-card">
+          <div className="login-brand">
+            <div className="brand-icon" style={{ width: '48px', height: '48px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(195, 177, 137, 0.1)', border: '1px solid rgba(195, 177, 137, 0.2)' }}>
+              <Building2 style={{ color: "#c3b189" }} size={24} />
+            </div>
+            <div>
+              <h1 style={{ fontSize: '1.5rem', fontWeight: 700, fontFamily: 'var(--font-display)', color: '#ffffff', margin: 0 }}>Automatix</h1>
+              <span style={{ fontSize: '0.72rem', color: '#8c96a8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Inventory Management System</span>
+            </div>
+          </div>
+          
+          <div className="login-divider"></div>
+          
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#ffffff', margin: '0 0 4px 0' }}>Branch Login</h2>
+          <p style={{ fontSize: '0.82rem', color: '#8c96a8', margin: '0 0 24px 0' }}>Enter your branch credentials to access the operations dashboard.</p>
+          
+          <form onSubmit={handleLogin} className="login-form">
+            <div className="login-field">
+              <label className="login-label">Branch</label>
+              <select 
+                value={loginBranch} 
+                onChange={(e) => setLoginBranch(e.target.value)}
+                className="login-input"
+              >
+                <option value="HQ">HQ Operations Manager</option>
+                <option value="Dubai">Dubai Marina Branch</option>
+                <option value="Downtown">Downtown Dubai Branch</option>
+                <option value="Sharjah">Sharjah Al Nahda Branch</option>
+              </select>
+            </div>
+
+            <div className="login-field">
+              <label className="login-label">Password</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Enter branch password"
+                className="login-input"
+                required
+              />
+            </div>
+            
+            {loginError && (
+              <div className="login-error">
+                <AlertOctagon size={14} />
+                {loginError}
+              </div>
+            )}
+            
+            <button type="submit" className="login-submit-btn" disabled={loginLoading}>
+              {loginLoading ? (
+                <><RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> Authenticating...</>
+              ) : (
+                "Sign In"
+              )}
+            </button>
+          </form>
+          
+          <p style={{ fontSize: '0.72rem', color: '#555b6e', textAlign: 'center', marginTop: '20px' }}>
+            Access restricted to authorized branch personnel only.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (loading && !data) {
     return (
       <div className="flex flex-col items-center justify-center min-height-100vh h-screen gap-4" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: '16px' }}>
@@ -595,6 +750,48 @@ export default function Home() {
 
   const { lowStock, nearExpiry } = getAlerts();
   const { standard: standardTransfers, overrides: overrideTransfers } = getTransferSuggestions();
+
+  // Exclude transfers that have already been initiated (in Pending or Sent status)
+  const activeTransferKeys = new Set(
+    transfers
+      .filter(t => t.status === 'Pending' || t.status === 'Sent')
+      .map(t => `${t.from_store_id}-${t.to_store_id}-${t.product_id}`)
+  );
+
+  const uninitiatedStandardTransfers = standardTransfers.filter(s => 
+    !activeTransferKeys.has(`${s.from_store_id}-${s.to_store_id}-${s.product_id}`)
+  );
+
+  const uninitiatedOverrideTransfers = overrideTransfers.filter(s => 
+    !activeTransferKeys.has(`${s.from_store_id}-${s.to_store_id}-${s.product_id}`)
+  );
+
+  // Role-based filtering: branches only see suggestions where THEY are in deficit (destination)
+  const roleFilteredStandardSwaps = userRole === 'HQ'
+    ? uninitiatedStandardTransfers
+    : uninitiatedStandardTransfers.filter(s => s.to_store_id === selectedStoreId);
+
+  const roleFilteredOverrideSwaps = userRole === 'HQ'
+    ? uninitiatedOverrideTransfers
+    : uninitiatedOverrideTransfers.filter(s => s.to_store_id === selectedStoreId);
+
+  const incomingTransfers = transfers.filter(t => 
+    (userRole === 'HQ' || t.to_store_id === selectedStoreId) && t.status === 'Sent'
+  );
+
+  const outgoingTransfers = transfers.filter(t => 
+    (userRole === 'HQ' || t.from_store_id === selectedStoreId) && t.status === 'Pending'
+  );
+
+  const completedTransfers = transfers.filter(t => 
+    (userRole === 'HQ' || t.from_store_id === selectedStoreId || t.to_store_id === selectedStoreId) && 
+    (t.status === 'Completed' || t.status === 'Cancelled')
+  );
+
+  const roleFilteredAlerts = alerts.filter(a => 
+    userRole === 'HQ' || a.store_id === selectedStoreId
+  );
+
   const currentBranchName = selectedStoreId 
     ? data.stores.find(s => s.id === selectedStoreId)?.name 
     : "All Branches";
@@ -729,60 +926,160 @@ export default function Home() {
       <main className="main-content">
         
         {/* Main Header */}
-        <header className="main-header">
+        <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
           <div className="header-title">
             <h2>Supermarket Ops Desk</h2>
             <p>Real-time alerts, stock level forecasts, and inter-branch swaps</p>
           </div>
           
-          <div className="filter-bar">
-            <button 
-              onClick={() => setSelectedStoreId(null)}
-              className={`filter-btn ${selectedStoreId === null ? "active" : ""}`}
-            >
-              All Branches
-            </button>
-            {data.stores.map(store => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {/* Notification Bell Button & Dropdown */}
+            <div className="notification-bell-container" style={{ position: 'relative' }}>
               <button 
-                key={store.id}
-                onClick={() => setSelectedStoreId(store.id)}
-                className={`filter-btn ${selectedStoreId === store.id ? "active" : ""}`}
+                onClick={() => setNotificationsOpen(!notificationsOpen)}
+                className="notification-bell-btn"
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '8px',
+                  background: '#191d29',
+                  border: '1px solid #232733',
+                  color: notificationsOpen ? '#c3b189' : '#8c96a8',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                title="Watchdog Notifications"
               >
-                {store.name.split(" ")[0]}
+                <Bell size={18} />
+                {roleFilteredAlerts.length > 0 && (
+                  <span className="bell-badge animate-pulse" style={{
+                    position: 'absolute',
+                    top: '-5px',
+                    right: '-5px',
+                    background: '#dd5e56',
+                    color: '#ffffff',
+                    fontSize: '0.65rem',
+                    fontWeight: 700,
+                    borderRadius: '10px',
+                    padding: '2px 6px',
+                    minWidth: '18px',
+                    textAlign: 'center',
+                    boxShadow: '0 0 10px rgba(221, 94, 86, 0.6)'
+                  }}>
+                    {roleFilteredAlerts.length}
+                  </span>
+                )}
               </button>
-            ))}
+
+              {/* Notification Popover Dropdown */}
+              {notificationsOpen && (
+                <div className="notifications-dropdown-menu" style={{
+                  position: 'absolute',
+                  top: '115%',
+                  right: 0,
+                  background: '#12141a',
+                  border: '1px solid rgba(195, 177, 137, 0.25)',
+                  borderRadius: '12px',
+                  width: '380px',
+                  boxShadow: '0 15px 35px rgba(0,0,0,0.6)',
+                  zIndex: 200,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '12px 16px',
+                    borderBottom: '1px solid #232733',
+                    background: 'rgba(255,255,255,0.02)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertOctagon size={16} style={{ color: '#dd5e56' }} />
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff' }}>
+                        Watchdog Alerts ({roleFilteredAlerts.length})
+                      </span>
+                    </div>
+                    <span className="badge badge-red" style={{ fontSize: '0.65rem' }}>Active Monitoring</span>
+                  </div>
+
+                  <div style={{ overflowY: 'auto', maxHeight: '320px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {roleFilteredAlerts.length === 0 ? (
+                      <div style={{ padding: '24px 12px', textAlign: 'center', color: '#8c96a8', fontSize: '0.8rem' }}>
+                        No active stock alerts for {userRole === 'HQ' ? 'any branch' : currentBranchName}.
+                      </div>
+                    ) : (
+                      roleFilteredAlerts.map(alert => (
+                        <div key={alert.id} className="alerts-banner-item" style={{ margin: 0 }}>
+                          <div className="alerts-banner-text" style={{ fontSize: '0.78rem' }}>
+                            <span className={`alert-indicator ${alert.alert_type}`}></span>
+                            <p style={{ margin: 0 }}>{alert.message}</p>
+                          </div>
+                          <button 
+                            onClick={() => handleDismissAlert(alert.id)}
+                            className="dismiss-alert-btn"
+                            style={{ fontSize: '0.7rem' }}
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Authenticated Role Indicator */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#191d29', border: '1px solid #232733', borderRadius: '8px', padding: '8px 16px' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#c3b189', color: '#0b0d13', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.82rem' }}>
+                {userRole === 'HQ' ? 'HQ' : userRole[0]}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '0.68rem', color: '#8c96a8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Logged In</span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#ffffff' }}>
+                  {userRole === 'HQ' ? 'HQ Operations Manager' : `${currentBranchName} Manager`}
+                </span>
+              </div>
+              <button 
+                onClick={handleLogout}
+                style={{ background: 'transparent', border: '1px solid rgba(221, 94, 86, 0.3)', color: '#dd5e56', fontSize: '0.72rem', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', marginLeft: '8px', transition: 'all 0.2s ease' }}
+              >
+                Logout
+              </button>
+            </div>
+
+            {/* Branch Selection Filters (Visible to HQ Only) */}
+            {userRole === 'HQ' ? (
+              <div className="filter-bar">
+                <button 
+                  onClick={() => setSelectedStoreId(null)}
+                  className={`filter-btn ${selectedStoreId === null ? "active" : ""}`}
+                >
+                  All Branches
+                </button>
+                {data.stores.map(store => (
+                  <button 
+                    key={store.id}
+                    onClick={() => setSelectedStoreId(store.id)}
+                    className={`filter-btn ${selectedStoreId === store.id ? "active" : ""}`}
+                  >
+                    {store.name.split(" ")[0]}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="badge badge-amber" style={{ padding: '10px 16px', fontSize: '0.8rem', border: '1px solid rgba(195, 177, 137, 0.3)', borderRadius: '8px', color: '#c3b189', fontWeight: 600, background: 'rgba(195, 177, 137, 0.05)' }}>
+                Branch Locked: {currentBranchName}
+              </div>
+            )}
           </div>
         </header>
-
-        {/* Proactive Audit Alerts Banner */}
-        {alerts && alerts.length > 0 && (
-          <section className="alerts-banner-card">
-            <div className="alerts-banner-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <AlertOctagon size={18} style={{ color: '#dd5e56' }} />
-                <h4 style={{ margin: 0, fontWeight: 600, color: '#ffffff', fontSize: '0.95rem' }}>Proactive Audit Alerts ({alerts.length})</h4>
-              </div>
-              <span className="badge badge-red animate-pulse" style={{ fontSize: '0.72rem' }}>Live Watchdog Active</span>
-            </div>
-            
-            <div className="alerts-banner-list">
-              {alerts.map(alert => (
-                <div key={alert.id} className="alerts-banner-item">
-                  <div className="alerts-banner-text">
-                    <span className={`alert-indicator ${alert.alert_type}`}></span>
-                    <p style={{ margin: 0 }}>{alert.message}</p>
-                  </div>
-                  <button 
-                    onClick={() => handleDismissAlert(alert.id)}
-                    className="dismiss-alert-btn"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
         {/* Stats Grid */}
         <section className="stats-grid">
@@ -1024,14 +1321,14 @@ export default function Home() {
             )}
 
             <div className="swap-list">
-              {standardTransfers.length === 0 && overrideTransfers.length === 0 && (
+              {roleFilteredStandardSwaps.length === 0 && roleFilteredOverrideSwaps.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '32px', border: '1px dashed #232733', borderRadius: '12px', color: '#8c96a8', fontSize: '0.8rem' }}>
                   No stock swaps currently required. All stores matching reorder thresholds.
                 </div>
               )}
 
               {/* Standard feasible transfers */}
-              {standardTransfers.map((swap, idx) => (
+              {roleFilteredStandardSwaps.map((swap, idx) => (
                 <div key={idx} className="swap-item">
                   <div className="swap-info">
                     <h4 className="swap-product">{swap.product_name}</h4>
@@ -1050,18 +1347,18 @@ export default function Home() {
                     className="btn-primary"
                     style={{ padding: '6px 12px', fontSize: '0.8rem' }}
                   >
-                    Swap Stock
+                    Initiate Request
                   </button>
                 </div>
               ))}
 
               {/* Overrides Transfers */}
-              {overrideTransfers.length > 0 && (
+              {roleFilteredOverrideSwaps.length > 0 && (
                 <>
                   <div className="swap-section-title">
                     Urgent Overrides (Exceeds distance limit of {data.rules.max_transfer_distance_km} KM)
                   </div>
-                  {overrideTransfers.map((swap, idx) => (
+                  {roleFilteredOverrideSwaps.map((swap, idx) => (
                     <div key={idx} className="swap-item override">
                       <div className="swap-info">
                         <div className="swap-title-row">
@@ -1090,6 +1387,133 @@ export default function Home() {
                 </>
               )}
             </div>
+          </div>
+
+          {/* Branch Transfer Portal (Logistics Tracker) */}
+          <div className="action-card" style={{ marginTop: '24px' }}>
+            <div className="action-header">
+              <RefreshCw size={18} style={{ color: "#c3b189" }} />
+              <h3>Branch Transfer Portal ({userRole === 'HQ' ? 'HQ Audit' : `${currentBranchName} Store`})</h3>
+            </div>
+            <p className="action-desc">
+              Track logistics shipments. Stock updates are committed to SQLite only when incoming shipments are marked "Completed" by the receiving branch.
+            </p>
+
+            {/* Section: Outgoing Dispatches */}
+            {(userRole === 'HQ' || outgoingTransfers.length > 0) && (
+              <div style={{ marginTop: '16px' }}>
+                <span className="swap-section-title">Outgoing Dispatches (To Ship)</span>
+                {outgoingTransfers.length === 0 ? (
+                  <div style={{ padding: '16px', border: '1px dashed #232733', borderRadius: '8px', color: '#8c96a8', fontSize: '0.78rem', textAlign: 'center' }}>No outgoing dispatches pending.</div>
+                ) : (
+                  <div className="swap-list">
+                    {outgoingTransfers.map((req) => (
+                      <div key={req.id} className="swap-item">
+                        <div className="swap-info">
+                          <h4 className="swap-product">{req.product_name}</h4>
+                          <div className="swap-path">
+                            <span className="swap-source">{req.from_store_name.split(" ")[0]}</span>
+                            <ChevronRight size={12} />
+                            <span className="swap-dest">{req.to_store_name.split(" ")[0]}</span>
+                          </div>
+                          <div className="swap-meta">
+                            <span>Qty: <strong>{req.quantity}</strong></span>
+                            <span className="badge badge-gray" style={{ fontSize: '9px', padding: '1px 6px', background: 'rgba(255,255,255,0.05)', color: '#8c96a8' }}>Pending Dispatch</span>
+                          </div>
+                        </div>
+                        
+                        {userRole !== 'HQ' && (
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button 
+                              onClick={() => handleUpdateTransferStatus(req.id, 'Sent')}
+                              className="btn-primary"
+                              style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+                            >
+                              Dispatch (Ship)
+                            </button>
+                            <button 
+                              onClick={() => handleUpdateTransferStatus(req.id, 'Cancelled')}
+                              className="btn-secondary"
+                              style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#dd5e56', borderColor: 'rgba(221, 94, 86, 0.3)' }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Section: Incoming Shipments */}
+            {(userRole === 'HQ' || incomingTransfers.length > 0) && (
+              <div style={{ marginTop: '20px' }}>
+                <span className="swap-section-title">Incoming Shipments (In Transit)</span>
+                {incomingTransfers.length === 0 ? (
+                  <div style={{ padding: '16px', border: '1px dashed #232733', borderRadius: '8px', color: '#8c96a8', fontSize: '0.78rem', textAlign: 'center' }}>No incoming shipments in transit.</div>
+                ) : (
+                  <div className="swap-list">
+                    {incomingTransfers.map((req) => (
+                      <div key={req.id} className="swap-item">
+                        <div className="swap-info">
+                          <h4 className="swap-product">{req.product_name}</h4>
+                          <div className="swap-path">
+                            <span className="swap-source" style={{ color: '#8c96a8' }}>{req.from_store_name.split(" ")[0]}</span>
+                            <ChevronRight size={12} />
+                            <span className="swap-dest" style={{ color: '#1ba56b' }}>{req.to_store_name.split(" ")[0]}</span>
+                          </div>
+                          <div className="swap-meta">
+                            <span>Qty: <strong>{req.quantity}</strong></span>
+                            <span className="badge badge-blue" style={{ fontSize: '9px', padding: '1px 6px', background: 'rgba(27,165,107,0.1)', color: '#1ba56b' }}>In Transit</span>
+                          </div>
+                        </div>
+                        
+                        {userRole !== 'HQ' ? (
+                          <button 
+                            onClick={() => handleUpdateTransferStatus(req.id, 'Completed')}
+                            className="btn-primary"
+                            style={{ padding: '6px 12px', fontSize: '0.78rem', background: '#1ba56b', borderColor: '#1ba56b' }}
+                          >
+                            Mark Received
+                          </button>
+                        ) : (
+                          <span className="text-muted" style={{ fontSize: '0.75rem' }}>Waiting for destination receive</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Section: Completed & Cancelled Log */}
+            {completedTransfers.length > 0 && (
+              <div style={{ marginTop: '20px' }}>
+                <span className="swap-section-title">Transfer History Logs</span>
+                <div className="swap-list" style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {completedTransfers.map((req) => (
+                    <div key={req.id} className="swap-item" style={{ opacity: 0.6 }}>
+                      <div className="swap-info">
+                        <h4 className="swap-product" style={{ fontSize: '0.82rem' }}>{req.product_name}</h4>
+                        <div className="swap-path" style={{ fontSize: '0.72rem' }}>
+                          <span>{req.from_store_name.split(" ")[0]}</span>
+                          <ChevronRight size={10} />
+                          <span>{req.to_store_name.split(" ")[0]}</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>Qty: {req.quantity}</span>
+                        <span className={`badge ${req.status === 'Completed' ? 'badge-green' : 'badge-red'}`} style={{ fontSize: '8px', padding: '1px 4px' }}>
+                          {req.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* CrewAI Agent Audit & Command Panel */}
