@@ -1,4 +1,5 @@
 import os
+import random
 import sqlite3
 import threading
 import time
@@ -6,7 +7,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Import CrewAI orchestration components
 from crewai import Crew
@@ -134,6 +135,27 @@ def startup_event():
             FOREIGN KEY(product_id) REFERENCES products(id)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_number TEXT,
+            store_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            unit_price_aed REAL,
+            total_cost_aed REAL,
+            sender_phone TEXT,
+            receiver_phone TEXT,
+            status TEXT DEFAULT 'Pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(store_id) REFERENCES stores(id),
+            FOREIGN KEY(product_id) REFERENCES products(id)
+        )
+    """)
+    # Seed default WhatsApp numbers in business_rules if missing
+    cursor.execute("INSERT OR IGNORE INTO business_rules (key, value) VALUES ('sender_whatsapp', '+971501234567')")
+    cursor.execute("INSERT OR IGNORE INTO business_rules (key, value) VALUES ('receiver_whatsapp', '+971509876543')")
     conn.commit()
     conn.close()
     
@@ -159,6 +181,20 @@ class CommandRequest(BaseModel):
 
 class TransferStatusUpdate(BaseModel):
     request_id: int
+    status: str
+
+class POCreateRequest(BaseModel):
+    store_id: int
+    product_id: int
+    quantity: int
+    unit_price_aed: Optional[float] = 0.0
+    total_cost_aed: Optional[float] = 0.0
+    sender_phone: Optional[str] = ""
+    receiver_phone: Optional[str] = ""
+    custom_message: Optional[str] = None
+
+class POStatusUpdate(BaseModel):
+    po_id: int
     status: str
 
 class LoginRequest(BaseModel):
@@ -672,6 +708,85 @@ def update_transfer_status(req: TransferStatusUpdate):
         conn.commit()
         conn.close()
         return {"status": "success", "message": f"Transfer status updated to {req.status} successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/purchase-orders")
+def get_purchase_orders():
+    """Retrieves all purchase orders joined with store and product names."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT po.id, po.po_number, po.store_id, po.product_id, po.quantity,
+                   po.unit_price_aed, po.total_cost_aed, po.sender_phone, po.receiver_phone,
+                   po.status, po.created_at, po.updated_at,
+                   s.name as store_name, p.name as product_name, p.category
+            FROM purchase_orders po
+            JOIN stores s ON po.store_id = s.id
+            JOIN products p ON po.product_id = p.id
+            ORDER BY po.created_at DESC
+        """)
+        orders = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return {"status": "success", "orders": orders}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/purchase-orders/create")
+def create_purchase_order(req: POCreateRequest):
+    """Logs a draft Purchase Order in Pending status."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Generate PO reference number
+        po_number = f"PO-{datetime.now().strftime('%Y%m%d')}-{random.randint(100, 999)}"
+        
+        cursor.execute("""
+            INSERT INTO purchase_orders (po_number, store_id, product_id, quantity, unit_price_aed, total_cost_aed, sender_phone, receiver_phone, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+        """, (po_number, req.store_id, req.product_id, req.quantity, req.unit_price_aed, req.total_cost_aed, req.sender_phone, req.receiver_phone))
+        
+        po_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return {"status": "success", "po_number": po_number, "po_id": po_id, "message": f"Draft PO {po_number} logged in Pending status."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/purchase-orders/update-status")
+def update_purchase_order_status(req: POStatusUpdate):
+    """Updates PO status. If Received, increments stock level in SQLite store_inventory."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM purchase_orders WHERE id = ?", (req.po_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Purchase order not found.")
+        
+        po = dict(row)
+        
+        if req.status == 'Received' and po['status'] != 'Received':
+            # Increment stock level in SQLite ONLY when received
+            cursor.execute("""
+                UPDATE store_inventory
+                SET stock_level = stock_level + ?
+                WHERE store_id = ? AND product_id = ?
+            """, (po['quantity'], po['store_id'], po['product_id']))
+        
+        cursor.execute("""
+            UPDATE purchase_orders
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (req.status, req.po_id))
+        
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": f"Purchase Order status updated to {req.status} successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -22,7 +22,11 @@ import {
   Plus,
   X,
   Check,
-  Bell
+  Bell,
+  MessageSquare,
+  Phone,
+  Send,
+  FileSpreadsheet
 } from "lucide-react";
 
 interface Store {
@@ -36,7 +40,6 @@ interface Connection {
   to_store_name: string;
   from_store_id: number;
   to_store_id: number;
-  distance_km: number;
 }
 
 interface InventoryItem {
@@ -56,7 +59,8 @@ interface Rules {
   ramadan_reorder_multiplier: string;
   standard_reorder_multiplier: string;
   allow_inter_branch_transfers: string;
-  max_transfer_distance_km: string;
+  sender_whatsapp?: string;
+  receiver_whatsapp?: string;
 }
 
 export default function Home() {
@@ -118,6 +122,53 @@ export default function Home() {
   const [alerts, setAlerts] = useState<any[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [transfers, setTransfers] = useState<any[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
+  const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
+
+  // Purchase Order Modal states
+  const [showPoModal, setShowPoModal] = useState(false);
+  const [poDraftItem, setPoDraftItem] = useState<{
+    store_id: number;
+    store_name: string;
+    product_id: number;
+    product_name: string;
+    category: string;
+    price_aed: number;
+    stock_level: number;
+    reorder_threshold: number;
+    suggested_qty: number;
+  } | null>(null);
+  const [poQty, setPoQty] = useState<number>(10);
+  const [poLoading, setPoLoading] = useState(false);
+  const [customWaMessage, setCustomWaMessage] = useState<string>("");
+
+  // Helper to open PO Modal with default clean WhatsApp message draft
+  const openPoModalForItem = (item: any, qty: number) => {
+    const storeName = item.store_name || item.to_store_name || "Branch";
+    const poRef = `PO-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    setPoDraftItem({
+      store_id: item.store_id || item.to_store_id,
+      store_name: storeName,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      category: item.category || "General",
+      price_aed: 0,
+      stock_level: item.stock_level || 0,
+      reorder_threshold: item.reorder_threshold || qty,
+      suggested_qty: qty
+    });
+    setPoQty(qty);
+    setCustomWaMessage(
+      `*AUTOMATIX OFFICIAL PURCHASE ORDER*\n` +
+      `PO Ref: #${poRef}\n` +
+      `Destination: ${storeName}\n` +
+      `Product: ${item.product_name}\n` +
+      `Category: ${item.category || "General"}\n` +
+      `Order Qty: ${qty} units\n\n` +
+      `Please confirm order dispatch and estimated delivery time.`
+    );
+    setShowPoModal(true);
+  };
 
   // Auth / Login states
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -172,6 +223,7 @@ export default function Home() {
       setEditRules(json.rules);
       setError(null);
       fetchTransfers();
+      fetchPurchaseOrders();
     } catch (err: any) {
       setError(err.message || "Failed to fetch data.");
     } finally {
@@ -203,6 +255,90 @@ export default function Home() {
     }
   };
 
+  // Load active purchase orders from SQLite
+  const fetchPurchaseOrders = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/purchase-orders");
+      if (!res.ok) throw new Error("Failed to fetch purchase orders.");
+      const json = await res.json();
+      setPurchaseOrders(json.orders || []);
+    } catch (err: any) {
+      console.error("PO fetch error:", err.message);
+    }
+  };
+
+  // Create & Dispatch Purchase Order via WhatsApp
+  const handleCreatePO = async () => {
+    if (!poDraftItem || !data) return;
+    try {
+      setPoLoading(true);
+      const senderPhone = editRules?.sender_whatsapp || data.rules.sender_whatsapp || "+971501234567";
+      const receiverPhone = editRules?.receiver_whatsapp || data.rules.receiver_whatsapp || "+971509876543";
+
+      const res = await fetch("http://localhost:8000/api/purchase-orders/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: poDraftItem.store_id,
+          product_id: poDraftItem.product_id,
+          quantity: poQty,
+          unit_price_aed: 0.0,
+          total_cost_aed: 0.0,
+          sender_phone: senderPhone,
+          receiver_phone: receiverPhone
+        })
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to log Purchase Order.");
+
+      // Formatted WhatsApp Restock Message using custom edited message from textarea
+      const finalMessage = customWaMessage || (
+        `*AUTOMATIX OFFICIAL PURCHASE ORDER*\n` +
+        `PO Ref: #${json.po_number || 'PO-2026'}\n` +
+        `Destination: ${poDraftItem.store_name}\n` +
+        `Product: ${poDraftItem.product_name}\n` +
+        `Category: ${poDraftItem.category}\n` +
+        `Order Qty: ${poQty} units\n\n` +
+        `Please confirm order dispatch and estimated delivery time.`
+      );
+
+      // Open WhatsApp web / API in new tab
+      const cleanPhone = receiverPhone.replace(/[^0-9+]/g, '');
+      const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(cleanPhone)}&text=${encodeURIComponent(finalMessage)}`;
+      window.open(waUrl, "_blank");
+
+      setShowPoModal(false);
+      setPoDraftItem(null);
+      setCrudSuccess(`Draft PO ${json.po_number} logged successfully and sent to WhatsApp!`);
+      fetchPurchaseOrders();
+    } catch (err: any) {
+      alert("PO Error: " + err.message);
+    } finally {
+      setPoLoading(false);
+    }
+  };
+
+  // Mark Purchase Order as Received (Commit stock to SQLite)
+  const handleReceivePO = async (poId: number) => {
+    try {
+      const res = await fetch("http://localhost:8000/api/purchase-orders/update-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ po_id: poId, status: "Received" })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || "Failed to update PO status.");
+
+      setCrudSuccess("Stock shipment received! SQLite inventory updated.");
+      fetchData();
+      fetchPurchaseOrders();
+      fetchAlerts();
+    } catch (err: any) {
+      setCrudError("PO Receive Error: " + err.message);
+    }
+  };
+
   // Dismiss an active alert
   const handleDismissAlert = async (alertId: number) => {
     try {
@@ -221,10 +357,12 @@ export default function Home() {
     fetchData();
     fetchAlerts();
     fetchTransfers();
+    fetchPurchaseOrders();
 
     const interval = setInterval(() => {
       fetchAlerts();
       fetchTransfers();
+      fetchPurchaseOrders();
     }, 10000);
 
     return () => clearInterval(interval);
@@ -607,11 +745,10 @@ export default function Home() {
 
   // Generate inter-branch transfer suggestions based on excess stock in database
   const getTransferSuggestions = () => {
-    if (!data) return { standard: [], overrides: [] };
-    const maxDist = parseFloat(data.rules.max_transfer_distance_km || "35.0");
+    if (!data) return [];
     const transfersEnabled = data.rules.allow_inter_branch_transfers === "1";
     
-    if (!transfersEnabled) return { standard: [], overrides: [] };
+    if (!transfersEnabled) return [];
     
     const { lowStock } = getAlerts();
     const suggestions: Array<{
@@ -622,13 +759,12 @@ export default function Home() {
       to_store_id: number;
       to_store_name: string;
       qty: number;
-      distance_km: number;
-      is_override: boolean;
+      price_aed: number;
+      category: string;
     }> = [];
     
     lowStock.forEach(item => {
       // Find other branches that have excess stock of this product
-      // Excess stock is defined as stock_level > reorder_threshold
       const sources = data.inventory.filter(source => 
         source.product_id === item.product_id && 
         source.store_id !== item.store_id && 
@@ -641,13 +777,6 @@ export default function Home() {
         const transferQty = Math.min(excess, deficit);
         
         if (transferQty > 0) {
-          // Find distance
-          const connection = data.connections.find(conn => 
-            conn.from_store_id === source.store_id && conn.to_store_id === item.store_id
-          );
-          const distance = connection ? connection.distance_km : 999;
-          const is_override = distance > maxDist;
-          
           suggestions.push({
             product_id: item.product_id,
             product_name: item.product_name,
@@ -656,17 +785,14 @@ export default function Home() {
             to_store_id: item.store_id,
             to_store_name: item.store_name,
             qty: transferQty,
-            distance_km: distance,
-            is_override
+            price_aed: item.price_aed,
+            category: item.category
           });
         }
       });
     });
     
-    return {
-      standard: suggestions.filter(s => !s.is_override),
-      overrides: suggestions.filter(s => s.is_override)
-    };
+    return suggestions;
   };
 
   // Login Screen Gate
@@ -768,7 +894,7 @@ export default function Home() {
   if (!data) return null;
 
   const { lowStock, nearExpiry } = getAlerts();
-  const { standard: standardTransfers, overrides: overrideTransfers } = getTransferSuggestions();
+  const allSuggestions = getTransferSuggestions();
 
   // Exclude transfers that have already been initiated (in Pending or Sent status)
   const activeTransferKeys = new Set(
@@ -777,22 +903,19 @@ export default function Home() {
       .map(t => `${t.from_store_id}-${t.to_store_id}-${t.product_id}`)
   );
 
-  const uninitiatedStandardTransfers = standardTransfers.filter(s => 
-    !activeTransferKeys.has(`${s.from_store_id}-${s.to_store_id}-${s.product_id}`)
-  );
-
-  const uninitiatedOverrideTransfers = overrideTransfers.filter(s => 
+  const availableSuggestions = allSuggestions.filter(s => 
     !activeTransferKeys.has(`${s.from_store_id}-${s.to_store_id}-${s.product_id}`)
   );
 
   // Role-based filtering: branches only see suggestions where THEY are in deficit (destination)
-  const roleFilteredStandardSwaps = userRole === 'HQ'
-    ? uninitiatedStandardTransfers
-    : uninitiatedStandardTransfers.filter(s => s.to_store_id === selectedStoreId);
+  const roleFilteredSwaps = userRole === 'HQ'
+    ? availableSuggestions
+    : availableSuggestions.filter(s => s.to_store_id === selectedStoreId);
 
-  const roleFilteredOverrideSwaps = userRole === 'HQ'
-    ? uninitiatedOverrideTransfers
-    : uninitiatedOverrideTransfers.filter(s => s.to_store_id === selectedStoreId);
+  // Role-based filtering for Purchase Orders
+  const roleFilteredPurchaseOrders = purchaseOrders.filter(po => 
+    userRole === 'HQ' || po.store_id === selectedStoreId
+  );
 
   const incomingTransfers = transfers.filter(t => 
     (userRole === 'HQ' || t.to_store_id === selectedStoreId) && t.status === 'Sent'
@@ -820,142 +943,31 @@ export default function Home() {
     : data.inventory;
 
   return (
-    <div className="dashboard-grid">
+    <div className="dashboard-grid full-width-layout">
       
-      {/* 1. Sidebar Rules configurator */}
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-icon">
-            <Building2 style={{ color: "#c3b189" }} size={22} />
-          </div>
-          <div className="brand-info">
-            <h1 className="brand-name">Automatix</h1>
-            <span className="brand-subtitle">Retail AI Squad</span>
-          </div>
-        </div>
-
-        <div className="config-section">
-          <div className="config-title">
-            <Sliders size={14} style={{ color: "#c3b189" }} />
-            <span>Operational Config</span>
-          </div>
-
-          <div className="config-list">
-            
-            {/* Near Expiry Days Slider */}
-            <div className="config-group">
-              <div className="config-header">
-                <span className="config-label">Near-Expiry Threshold</span>
-                <span className="config-value">{data.rules.near_expiry_days_threshold} Days</span>
-              </div>
-              <input 
-                type="range" 
-                min="1" 
-                max="10" 
-                value={editRules?.near_expiry_days_threshold || "3"} 
-                onChange={(e) => setEditRules(prev => prev ? { ...prev, near_expiry_days_threshold: e.target.value } : null)}
-                onMouseUp={() => handleUpdateRule("near_expiry_days_threshold", editRules?.near_expiry_days_threshold || "3")}
-                onTouchEnd={() => handleUpdateRule("near_expiry_days_threshold", editRules?.near_expiry_days_threshold || "3")}
-                className="config-slider"
-              />
-              <span className="config-help">Flag products expiring within this range.</span>
-            </div>
-
-            {/* Max Distance Slider */}
-            <div className="config-group">
-              <div className="config-header">
-                <span className="config-label">Max Transfer Radius</span>
-                <span className="config-value">{data.rules.max_transfer_distance_km} KM</span>
-              </div>
-              <input 
-                type="range" 
-                min="10" 
-                max="100" 
-                step="5"
-                value={editRules?.max_transfer_distance_km ? parseFloat(editRules.max_transfer_distance_km) : 35} 
-                onChange={(e) => setEditRules(prev => prev ? { ...prev, max_transfer_distance_km: e.target.value } : null)}
-                onMouseUp={() => handleUpdateRule("max_transfer_distance_km", editRules?.max_transfer_distance_km || "35.0")}
-                onTouchEnd={() => handleUpdateRule("max_transfer_distance_km", editRules?.max_transfer_distance_km || "35.0")}
-                className="config-slider"
-              />
-              <span className="config-help">Max delivery distance for stock swaps.</span>
-            </div>
-
-            {/* Standard Multiplier Slider */}
-            <div className="config-group">
-              <div className="config-header">
-                <span className="config-label">Standard Reorder Mult.</span>
-                <span className="config-value">{data.rules.standard_reorder_multiplier}x</span>
-              </div>
-              <input 
-                type="range" 
-                min="1.0" 
-                max="3.0" 
-                step="0.1"
-                value={editRules?.standard_reorder_multiplier ? parseFloat(editRules.standard_reorder_multiplier) : 1.2} 
-                onChange={(e) => setEditRules(prev => prev ? { ...prev, standard_reorder_multiplier: e.target.value } : null)}
-                onMouseUp={() => handleUpdateRule("standard_reorder_multiplier", editRules?.standard_reorder_multiplier || "1.2")}
-                onTouchEnd={() => handleUpdateRule("standard_reorder_multiplier", editRules?.standard_reorder_multiplier || "1.2")}
-                className="config-slider"
-              />
-              <span className="config-help">Restock multiplication factor.</span>
-            </div>
-
-            {/* Ramadan Multiplier Slider */}
-            <div className="config-group">
-              <div className="config-header">
-                <span className="config-label">Ramadan Reorder Mult.</span>
-                <span className="config-value">{data.rules.ramadan_reorder_multiplier}x</span>
-              </div>
-              <input 
-                type="range" 
-                min="1.5" 
-                max="5.0" 
-                step="0.1"
-                value={editRules?.ramadan_reorder_multiplier ? parseFloat(editRules.ramadan_reorder_multiplier) : 2.5} 
-                onChange={(e) => setEditRules(prev => prev ? { ...prev, ramadan_reorder_multiplier: e.target.value } : null)}
-                onMouseUp={() => handleUpdateRule("ramadan_reorder_multiplier", editRules?.ramadan_reorder_multiplier || "2.5")}
-                onTouchEnd={() => handleUpdateRule("ramadan_reorder_multiplier", editRules?.ramadan_reorder_multiplier || "2.5")}
-                className="config-slider"
-              />
-              <span className="config-help">Multiplication factor for Ramadan season.</span>
-            </div>
-
-            {/* Enable/Disable Swaps */}
-            <div className="config-toggle">
-              <span className="config-label">Inter-Branch Transfers</span>
-              <button 
-                onClick={() => {
-                  const val = data.rules.allow_inter_branch_transfers === "1" ? "0" : "1";
-                  handleUpdateRule("allow_inter_branch_transfers", val);
-                  if (editRules) setEditRules({ ...editRules, allow_inter_branch_transfers: val });
-                }}
-                className={`badge ${data.rules.allow_inter_branch_transfers === "1" ? "badge-green" : "badge-red"}`}
-                style={{ cursor: 'pointer' }}
-              >
-                {data.rules.allow_inter_branch_transfers === "1" ? "Enabled" : "Disabled"}
-              </button>
-            </div>
-
-          </div>
-        </div>
-      </aside>
-
-      {/* 2. Main Content panel */}
-      <main className="main-content">
+      {/* Main Content panel */}
+      <main className="main-content" style={{ width: '100%', maxWidth: '1400px', margin: '0 auto' }}>
         
-        {/* Main Header */}
-        <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
-          <div className="header-title">
-            <h2>Supermarket Ops Desk</h2>
-            <p>Real-time alerts, stock level forecasts, and inter-branch swaps</p>
+        {/* Main Header Navbar */}
+        <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div className="brand-icon" style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(195, 177, 137, 0.1)', border: '1px solid rgba(195, 177, 137, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Building2 style={{ color: "#c3b189" }} size={22} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0, color: '#ffffff' }}>Automatix</h2>
+              <span style={{ fontSize: '0.72rem', color: '#8c96a8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Supermarket Ops Desk</span>
+            </div>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {/* Notification Bell Button & Dropdown */}
             <div className="notification-bell-container" style={{ position: 'relative' }}>
               <button 
-                onClick={() => setNotificationsOpen(!notificationsOpen)}
+                onClick={() => {
+                  setNotificationsOpen(!notificationsOpen);
+                  setConfigDrawerOpen(false);
+                }}
                 className="notification-bell-btn"
                 style={{
                   position: 'relative',
@@ -999,7 +1011,7 @@ export default function Home() {
                 <div className="notifications-dropdown-menu" style={{
                   position: 'absolute',
                   top: '115%',
-                  left: 0,
+                  right: 0,
                   background: '#12141a',
                   border: '1px solid rgba(195, 177, 137, 0.25)',
                   borderRadius: '12px',
@@ -1024,13 +1036,12 @@ export default function Home() {
                         Watchdog Alerts ({roleFilteredAlerts.length})
                       </span>
                     </div>
-                    <span className="badge badge-red" style={{ fontSize: '0.65rem' }}>Active Monitoring</span>
                   </div>
 
                   <div style={{ overflowY: 'auto', maxHeight: '320px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {roleFilteredAlerts.length === 0 ? (
                       <div style={{ padding: '24px 12px', textAlign: 'center', color: '#8c96a8', fontSize: '0.8rem' }}>
-                        No active stock alerts for {userRole === 'HQ' ? 'any branch' : currentBranchName}.
+                        No active stock alerts.
                       </div>
                     ) : (
                       roleFilteredAlerts.map(alert => (
@@ -1054,6 +1065,185 @@ export default function Home() {
               )}
             </div>
 
+            {/* Operational Config Button & Popover Drawer */}
+            <div className="config-drawer-container" style={{ position: 'relative' }}>
+              <button 
+                onClick={() => {
+                  setConfigDrawerOpen(!configDrawerOpen);
+                  setNotificationsOpen(false);
+                }}
+                className="notification-bell-btn"
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '8px',
+                  background: '#191d29',
+                  border: '1px solid #232733',
+                  color: configDrawerOpen ? '#c3b189' : '#8c96a8',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                title="Operational Configuration"
+              >
+                <Sliders size={18} />
+              </button>
+
+              {/* Config Popover Drawer Panel */}
+              {configDrawerOpen && (
+                <div className="config-popover-menu" style={{
+                  position: 'absolute',
+                  top: '115%',
+                  right: 0,
+                  background: '#12141a',
+                  border: '1px solid rgba(195, 177, 137, 0.25)',
+                  borderRadius: '12px',
+                  width: '380px',
+                  padding: '20px',
+                  boxShadow: '0 20px 50px rgba(0,0,0,0.85)',
+                  zIndex: 1000,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #232733', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Sliders size={16} style={{ color: '#c3b189' }} />
+                      <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ffffff' }}>Operational Config</span>
+                    </div>
+                    <button 
+                      onClick={() => setConfigDrawerOpen(false)}
+                      style={{ background: 'transparent', border: 'none', color: '#8c96a8', cursor: 'pointer' }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* WhatsApp Phone Number Configuration */}
+                  <div className="config-group">
+                    <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#c3b189', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Sender WhatsApp (Manager Phone)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                      <input 
+                        type="text"
+                        className="login-input"
+                        value={editRules?.sender_whatsapp || "+971501234567"}
+                        onChange={(e) => setEditRules(prev => prev ? { ...prev, sender_whatsapp: e.target.value } : null)}
+                        placeholder="+971501234567"
+                        style={{ fontSize: '0.82rem', padding: '8px 12px' }}
+                      />
+                      <button 
+                        onClick={() => handleUpdateRule("sender_whatsapp" as any, editRules?.sender_whatsapp || "+971501234567")}
+                        className="btn-primary"
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="config-group">
+                    <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#c3b189', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Receiver WhatsApp (Supplier Phone)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                      <input 
+                        type="text"
+                        className="login-input"
+                        value={editRules?.receiver_whatsapp || "+971509876543"}
+                        onChange={(e) => setEditRules(prev => prev ? { ...prev, receiver_whatsapp: e.target.value } : null)}
+                        placeholder="+971509876543"
+                        style={{ fontSize: '0.82rem', padding: '8px 12px' }}
+                      />
+                      <button 
+                        onClick={() => handleUpdateRule("receiver_whatsapp" as any, editRules?.receiver_whatsapp || "+971509876543")}
+                        className="btn-primary"
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Near Expiry Days Slider */}
+                  <div className="config-group">
+                    <div className="config-header">
+                      <span className="config-label">Near-Expiry Threshold</span>
+                      <span className="config-value">{data.rules.near_expiry_days_threshold} Days</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="1" 
+                      max="10" 
+                      value={editRules?.near_expiry_days_threshold || "3"} 
+                      onChange={(e) => setEditRules(prev => prev ? { ...prev, near_expiry_days_threshold: e.target.value } : null)}
+                      onMouseUp={() => handleUpdateRule("near_expiry_days_threshold", editRules?.near_expiry_days_threshold || "3")}
+                      onTouchEnd={() => handleUpdateRule("near_expiry_days_threshold", editRules?.near_expiry_days_threshold || "3")}
+                      className="config-slider"
+                    />
+                  </div>
+
+                  {/* Standard Multiplier Slider */}
+                  <div className="config-group">
+                    <div className="config-header">
+                      <span className="config-label">Standard Reorder Mult.</span>
+                      <span className="config-value">{data.rules.standard_reorder_multiplier}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="1.0" 
+                      max="3.0" 
+                      step="0.1"
+                      value={editRules?.standard_reorder_multiplier ? parseFloat(editRules.standard_reorder_multiplier) : 1.2} 
+                      onChange={(e) => setEditRules(prev => prev ? { ...prev, standard_reorder_multiplier: e.target.value } : null)}
+                      onMouseUp={() => handleUpdateRule("standard_reorder_multiplier", editRules?.standard_reorder_multiplier || "1.2")}
+                      onTouchEnd={() => handleUpdateRule("standard_reorder_multiplier", editRules?.standard_reorder_multiplier || "1.2")}
+                      className="config-slider"
+                    />
+                  </div>
+
+                  {/* Ramadan Multiplier Slider */}
+                  <div className="config-group">
+                    <div className="config-header">
+                      <span className="config-label">Ramadan Reorder Mult.</span>
+                      <span className="config-value">{data.rules.ramadan_reorder_multiplier}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="1.5" 
+                      max="5.0" 
+                      step="0.1"
+                      value={editRules?.ramadan_reorder_multiplier ? parseFloat(editRules.ramadan_reorder_multiplier) : 2.5} 
+                      onChange={(e) => setEditRules(prev => prev ? { ...prev, ramadan_reorder_multiplier: e.target.value } : null)}
+                      onMouseUp={() => handleUpdateRule("ramadan_reorder_multiplier", editRules?.ramadan_reorder_multiplier || "2.5")}
+                      onTouchEnd={() => handleUpdateRule("ramadan_reorder_multiplier", editRules?.ramadan_reorder_multiplier || "2.5")}
+                      className="config-slider"
+                    />
+                  </div>
+
+                  {/* Enable/Disable Swaps */}
+                  <div className="config-toggle">
+                    <span className="config-label">Inter-Branch Transfers</span>
+                    <button 
+                      onClick={() => {
+                        const val = data.rules.allow_inter_branch_transfers === "1" ? "0" : "1";
+                        handleUpdateRule("allow_inter_branch_transfers", val);
+                        if (editRules) setEditRules({ ...editRules, allow_inter_branch_transfers: val });
+                      }}
+                      className={`badge ${data.rules.allow_inter_branch_transfers === "1" ? "badge-green" : "badge-red"}`}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {data.rules.allow_inter_branch_transfers === "1" ? "Enabled" : "Disabled"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Authenticated Role Indicator */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#191d29', border: '1px solid #232733', borderRadius: '8px', padding: '8px 16px' }}>
               <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#c3b189', color: '#0b0d13', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '0.82rem' }}>
@@ -1072,69 +1262,44 @@ export default function Home() {
                 Logout
               </button>
             </div>
-
-            {/* Branch Selection Filters (Visible to HQ Only) */}
-            {userRole === 'HQ' ? (
-              <div className="filter-bar">
-                <button 
-                  onClick={() => setSelectedStoreId(null)}
-                  className={`filter-btn ${selectedStoreId === null ? "active" : ""}`}
-                >
-                  All Branches
-                </button>
-                {data.stores.map(store => (
-                  <button 
-                    key={store.id}
-                    onClick={() => setSelectedStoreId(store.id)}
-                    className={`filter-btn ${selectedStoreId === store.id ? "active" : ""}`}
-                  >
-                    {store.name.split(" ")[0]}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="badge badge-amber" style={{ padding: '10px 16px', fontSize: '0.8rem', border: '1px solid rgba(195, 177, 137, 0.3)', borderRadius: '8px', color: '#c3b189', fontWeight: 600, background: 'rgba(195, 177, 137, 0.05)' }}>
-                Branch Locked: {currentBranchName}
-              </div>
-            )}
           </div>
         </header>
 
         {/* Stats Grid */}
-        <section className="stats-grid">
+        <section className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
           {/* Stat Card: Alerts */}
           <div className="stat-card">
             <div className="stat-info">
               <span className="stat-label">Critical Stock Alerts</span>
-              <span className="stat-number">{lowStock.length + nearExpiry.length}</span>
-              <span className="stat-help">Across branches today</span>
+              <span className="stat-number">{lowStock.length}</span>
+              <span className="stat-help">Low stock items requiring restock</span>
             </div>
             <div className="stat-icon red">
               <AlertTriangle size={22} />
             </div>
           </div>
 
-          {/* Stat Card: Standard Swaps */}
+          {/* Stat Card: Swaps */}
           <div className="stat-card">
             <div className="stat-info">
-              <span className="stat-label">Feasible Transfers</span>
-              <span className="stat-number">{standardTransfers.length}</span>
-              <span className="stat-help">Ready to execute locally</span>
+              <span className="stat-label">Inter-Branch Swap Options</span>
+              <span className="stat-number">{roleFilteredSwaps.length}</span>
+              <span className="stat-help">Excess stock transfers available</span>
             </div>
             <div className="stat-icon green">
               <ArrowRightLeft size={22} />
             </div>
           </div>
 
-          {/* Stat Card: Overrides */}
+          {/* Stat Card: Supplier POs */}
           <div className="stat-card">
             <div className="stat-info">
-              <span className="stat-label">Override Options</span>
-              <span className="stat-number">{overrideTransfers.length}</span>
-              <span className="stat-help">Distance exceptions flagged</span>
+              <span className="stat-label">Pending Supplier POs</span>
+              <span className="stat-number">{roleFilteredPurchaseOrders.filter(po => po.status === 'Pending').length}</span>
+              <span className="stat-help">Awaiting WhatsApp shipment delivery</span>
             </div>
             <div className="stat-icon amber">
-              <TrendingUp size={22} />
+              <MessageSquare size={22} />
             </div>
           </div>
         </section>
@@ -1239,13 +1404,11 @@ export default function Home() {
                             style={{ width: '80px', padding: '4px 8px' }}
                           />
                         ) : (
-                          <span className="text-muted" style={{ fontSize: '0.85rem' }}>
-                            {item.reorder_threshold}
-                          </span>
+                          <span className="text-muted">{item.reorder_threshold}</span>
                         )}
                       </td>
-
-                      {/* Expiry cell */}
+                      
+                      {/* Expiry Date cell */}
                       <td>
                         {isEditing ? (
                           <input 
@@ -1320,17 +1483,17 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Action Swaps and Agent Audit Section */}
+        {/* Dual Restock Options & Logistics Section */}
         <section className="actions-grid">
           
-          {/* Stock Swaps Panel */}
+          {/* Dual Restock Engine (Inter-Branch Swap vs Supplier PO) */}
           <div className="action-card">
             <div className="action-header">
               <ArrowRightLeft size={18} style={{ color: "#c3b189" }} />
-              <h3>Suggested Inter-Branch Swaps</h3>
+              <h3>Restock Recommendations & Dual Options</h3>
             </div>
             <p className="action-desc">
-              Stock transfers suggested by matching Low Stock stores with branches holding excess. Final execution commits directly to SQLite.
+              When stock runs low, choose between an <strong>Inter-Branch Swap</strong> (if excess stock exists) or <strong>Supplier Purchase Order</strong> via WhatsApp.
             </p>
 
             {transferMessage && (
@@ -1340,76 +1503,158 @@ export default function Home() {
             )}
 
             <div className="swap-list">
-              {roleFilteredStandardSwaps.length === 0 && roleFilteredOverrideSwaps.length === 0 && (
+              {roleFilteredSwaps.length === 0 && lowStock.filter(item => userRole === 'HQ' || item.store_id === selectedStoreId).length === 0 && (
                 <div style={{ textAlign: 'center', padding: '32px', border: '1px dashed #232733', borderRadius: '12px', color: '#8c96a8', fontSize: '0.8rem' }}>
-                  No stock swaps currently required. All stores matching reorder thresholds.
+                  No restocks required. All stores are currently at safe inventory levels.
                 </div>
               )}
 
-              {/* Standard feasible transfers */}
-              {roleFilteredStandardSwaps.map((swap, idx) => (
-                <div key={idx} className="swap-item">
-                  <div className="swap-info">
-                    <h4 className="swap-product">{swap.product_name}</h4>
-                    <div className="swap-path">
-                      <span className="swap-source">{swap.from_store_name.split(" ")[0]}</span>
-                      <ChevronRight size={12} />
-                      <span className="swap-dest">{swap.to_store_name.split(" ")[0]}</span>
-                    </div>
-                    <div className="swap-meta">
-                      <span className="swap-distance"><MapPin size={10} /> {swap.distance_km} KM</span>
-                      <span>Qty: <strong className="swap-qty">{swap.qty}</strong></span>
+              {/* Option A: Inter-branch Swaps */}
+              {roleFilteredSwaps.map((swap, idx) => (
+                <div key={`swap-${idx}`} className="swap-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h4 className="swap-product">{swap.product_name}</h4>
+                      <div className="swap-path" style={{ marginTop: '2px' }}>
+                        <span className="swap-source">{swap.from_store_name.split(" ")[0]}</span>
+                        <ChevronRight size={12} />
+                        <span className="swap-dest">{swap.to_store_name.split(" ")[0]}</span>
+                      </div>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => handleExecuteTransfer(swap.from_store_id, swap.to_store_id, swap.product_id, swap.qty)}
-                    className="btn-primary"
-                    style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-                  >
-                    Initiate Request
-                  </button>
+
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <button 
+                      onClick={() => handleExecuteTransfer(swap.from_store_id, swap.to_store_id, swap.product_id, swap.qty)}
+                      className="btn-primary"
+                      style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+                    >
+                      <ArrowRightLeft size={13} /> Option 1: Inter-Branch Swap ({swap.qty} units)
+                    </button>
+                    <button 
+                      onClick={() => openPoModalForItem(swap, swap.qty)}
+                      className="btn-secondary"
+                      style={{ padding: '6px 14px', fontSize: '0.8rem', color: '#25D366', borderColor: 'rgba(37, 211, 102, 0.3)' }}
+                    >
+                      <MessageSquare size={13} /> Option 2: Draft Supplier PO
+                    </button>
+                  </div>
                 </div>
               ))}
 
-              {/* Overrides Transfers */}
-              {roleFilteredOverrideSwaps.length > 0 && (
-                <>
-                  <div className="swap-section-title">
-                    Urgent Overrides (Exceeds distance limit of {data.rules.max_transfer_distance_km} KM)
-                  </div>
-                  {roleFilteredOverrideSwaps.map((swap, idx) => (
-                    <div key={idx} className="swap-item override">
-                      <div className="swap-info">
-                        <div className="swap-title-row">
-                          <h4 className="swap-product">{swap.product_name}</h4>
-                          <span className="badge badge-amber" style={{ fontSize: '9px', padding: '2px 6px' }}>Override</span>
+              {/* Low stock items without active inter-branch swap: Option 2 Supplier PO always available */}
+              {lowStock
+                .filter(item => (userRole === 'HQ' || item.store_id === selectedStoreId) && !roleFilteredSwaps.some(s => s.product_id === item.product_id && s.to_store_id === item.store_id))
+                .map((item, idx) => {
+                  const suggestedPoQty = Math.max(10, item.reorder_threshold - item.stock_level);
+                  return (
+                    <div key={`po-only-${idx}`} className="swap-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <h4 className="swap-product">{item.product_name}</h4>
+                          <span style={{ fontSize: '0.78rem', color: '#dd5e56' }}>
+                            {item.store_name} | Stock: {item.stock_level} (Threshold: {item.reorder_threshold})
+                          </span>
                         </div>
-                        <div className="swap-path">
-                          <span className="swap-source" style={{ color: '#e69d30' }}>{swap.from_store_name.split(" ")[0]}</span>
-                          <ChevronRight size={12} />
-                          <span className="swap-dest override">{swap.to_store_name.split(" ")[0]}</span>
-                        </div>
-                        <div className="swap-meta">
-                          <span className="swap-distance override"><MapPin size={10} /> {swap.distance_km} KM</span>
-                          <span>Qty: <strong className="swap-qty">{swap.qty}</strong></span>
-                        </div>
+                        <span className="badge badge-amber" style={{ fontSize: '0.75rem' }}>No Excess Branch Stock</span>
                       </div>
-                      <button 
-                        onClick={() => handleExecuteTransfer(swap.from_store_id, swap.to_store_id, swap.product_id, swap.qty)}
-                        className="btn-secondary"
-                        style={{ padding: '6px 12px', fontSize: '0.8rem', color: '#dd5e56', borderColor: 'rgba(221, 94, 86, 0.3)' }}
-                      >
-                        Override Swap
-                      </button>
+
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button 
+                          onClick={() => openPoModalForItem(item, suggestedPoQty)}
+                          style={{
+                            padding: '8px 16px',
+                            fontSize: '0.82rem',
+                            background: 'linear-gradient(135deg, #25D366, #128C7E)',
+                            border: 'none',
+                            borderRadius: '8px',
+                            color: '#ffffff',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
+                          }}
+                        >
+                          <MessageSquare size={14} /> Draft Purchase Order from Supplier
+                        </button>
+                      </div>
                     </div>
-                  ))}
-                </>
-              )}
+                  );
+                })}
             </div>
           </div>
 
-          {/* Branch Transfer Portal (Logistics Tracker) */}
-          <div className="action-card" style={{ marginTop: '24px' }}>
+          {/* Supplier Purchase Orders Tracking Panel */}
+          <div className="action-card">
+            <div className="action-header">
+              <MessageSquare size={18} style={{ color: "#25D366" }} />
+              <h3>Supplier Purchase Orders Log</h3>
+            </div>
+            <p className="action-desc">
+              Track orders placed via WhatsApp. Stock commits to SQLite <strong>ONLY</strong> after clicking "Mark Received".
+            </p>
+
+            <div className="swap-list">
+              {roleFilteredPurchaseOrders.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px', border: '1px dashed #232733', borderRadius: '12px', color: '#8c96a8', fontSize: '0.8rem' }}>
+                  No active supplier purchase orders.
+                </div>
+              ) : (
+                roleFilteredPurchaseOrders.map((po) => (
+                  <div key={po.id} className="swap-item" style={{ opacity: po.status === 'Received' ? 0.65 : 1 }}>
+                    <div className="swap-info">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <h4 className="swap-product">{po.product_name}</h4>
+                        <span className="badge badge-amber" style={{ fontSize: '9px', padding: '2px 6px' }}>{po.po_number}</span>
+                      </div>
+                      <div className="swap-path" style={{ marginTop: '2px' }}>
+                        <span className="swap-dest">{po.store_name}</span>
+                        <span style={{ fontSize: '0.75rem', color: '#8c96a8', marginLeft: '6px' }}>| Supplier: {po.receiver_phone}</span>
+                      </div>
+                      <div className="swap-meta">
+                        <span>Order Qty: <strong>{po.quantity} units</strong></span>
+                        <span style={{ fontSize: '0.75rem', color: '#8c96a8' }}>Status: {po.status}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {po.status === 'Pending' ? (
+                        <button 
+                          onClick={() => handleReceivePO(po.id)}
+                          style={{
+                            padding: '8px 14px',
+                            fontSize: '0.78rem',
+                            background: '#1ba56b',
+                            border: 'none',
+                            borderRadius: '6px',
+                            color: '#ffffff',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}
+                        >
+                          <CheckCircle2 size={14} /> Mark Received
+                        </button>
+                      ) : (
+                        <span className="badge badge-green" style={{ fontSize: '0.75rem' }}>
+                          Received & Added to DB
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Branch Transfer Portal & Logistics Tracker */}
+        <section className="actions-grid" style={{ marginTop: '24px' }}>
+          
+          <div className="action-card">
             <div className="action-header">
               <RefreshCw size={18} style={{ color: "#c3b189" }} />
               <h3>Branch Transfer Portal ({userRole === 'HQ' ? 'HQ Audit' : `${currentBranchName} Store`})</h3>
@@ -1807,6 +2052,112 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Draft Purchase Order Modal */}
+      {showPoModal && poDraftItem && (
+        <div className="login-screen">
+          <div className="login-backdrop" onClick={() => setShowPoModal(false)}></div>
+          <div className="login-card" style={{ width: '540px', maxWidth: '95vw', padding: '32px', zIndex: 1100 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: 'rgba(37, 211, 102, 0.15)', border: '1px solid rgba(37, 211, 102, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <MessageSquare size={20} style={{ color: '#25D366' }} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#ffffff', fontWeight: 700 }}>Draft Purchase Order</h3>
+                  <span style={{ fontSize: '0.72rem', color: '#8c96a8' }}>Supplier Order via WhatsApp</span>
+                </div>
+              </div>
+              <button onClick={() => setShowPoModal(false)} style={{ background: 'transparent', border: 'none', color: '#8c96a8', cursor: 'pointer' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ background: '#13161e', border: '1px solid #232733', borderRadius: '10px', padding: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: '#8c96a8' }}>Destination Branch:</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff' }}>{poDraftItem.store_name}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.8rem', color: '#8c96a8' }}>Product Name:</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#c3b189' }}>{poDraftItem.product_name}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.8rem', color: '#8c96a8' }}>Category:</span>
+                <span style={{ fontSize: '0.85rem', color: '#ffffff' }}>{poDraftItem.category}</span>
+              </div>
+            </div>
+
+            <div className="login-field" style={{ marginBottom: '20px' }}>
+              <label className="login-label">Order Quantity (Units)</label>
+              <input 
+                type="number"
+                min="1"
+                className="login-input"
+                value={poQty}
+                onChange={(e) => {
+                  const newQty = Math.max(1, parseInt(e.target.value) || 1);
+                  setPoQty(newQty);
+                  setCustomWaMessage(prev => prev.replace(/Order Qty: \d+ units/, `Order Qty: ${newQty} units`));
+                }}
+                style={{ fontSize: '1.1rem', fontWeight: 700, color: '#c3b189' }}
+              />
+            </div>
+
+            {/* Live WhatsApp Message Preview (Editable) */}
+            <div className="login-field" style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label className="login-label" style={{ margin: 0 }}>WhatsApp Message Draft (Editable)</label>
+                <span style={{ fontSize: '0.72rem', color: '#25D366', fontWeight: 600 }}>Manager Editable</span>
+              </div>
+              <textarea 
+                value={customWaMessage}
+                onChange={(e) => setCustomWaMessage(e.target.value)}
+                style={{ 
+                  background: '#0b141a', 
+                  border: '1px solid #1f2c34', 
+                  borderRadius: '10px', 
+                  padding: '14px', 
+                  color: '#e9edef', 
+                  fontSize: '0.82rem', 
+                  fontFamily: 'monospace', 
+                  lineHeight: 1.5,
+                  minHeight: '160px',
+                  width: '100%',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
+
+            <button 
+              onClick={handleCreatePO} 
+              disabled={poLoading}
+              style={{
+                width: '100%',
+                padding: '14px',
+                background: 'linear-gradient(135deg, #25D366, #128C7E)',
+                border: 'none',
+                borderRadius: '10px',
+                color: '#ffffff',
+                fontWeight: 700,
+                fontSize: '0.92rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                boxShadow: '0 6px 20px rgba(37, 211, 102, 0.3)'
+              }}
+            >
+              {poLoading ? (
+                <><RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> Processing...</>
+              ) : (
+                <><Send size={18} /> Confirm & Send via WhatsApp</>
+              )}
+            </button>
           </div>
         </div>
       )}
