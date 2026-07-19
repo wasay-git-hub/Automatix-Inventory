@@ -145,7 +145,8 @@ export default function Home() {
   // Helper to open PO Modal with default clean WhatsApp message draft
   const openPoModalForItem = (item: any, qty: number) => {
     const storeName = item.store_name || item.to_store_name || "Branch";
-    const poRef = `PO-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const seqNum = String(purchaseOrders.length + 1).padStart(3, "0");
+    const poRef = `PO-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${seqNum}`;
     setPoDraftItem({
       store_id: item.store_id || item.to_store_id,
       store_name: storeName,
@@ -1122,29 +1123,7 @@ export default function Home() {
                     </button>
                   </div>
 
-                  {/* WhatsApp Phone Number Configuration */}
-                  <div className="config-group">
-                    <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#c3b189', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Sender WhatsApp (Manager Phone)
-                    </label>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                      <input 
-                        type="text"
-                        className="login-input"
-                        value={editRules?.sender_whatsapp || "+971501234567"}
-                        onChange={(e) => setEditRules(prev => prev ? { ...prev, sender_whatsapp: e.target.value } : null)}
-                        placeholder="+971501234567"
-                        style={{ fontSize: '0.82rem', padding: '8px 12px' }}
-                      />
-                      <button 
-                        onClick={() => handleUpdateRule("sender_whatsapp" as any, editRules?.sender_whatsapp || "+971501234567")}
-                        className="btn-primary"
-                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
-                      >
-                        Save
-                      </button>
-                    </div>
-                  </div>
+                  {/* Supplier WhatsApp Phone Number Configuration */}
 
                   <div className="config-group">
                     <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#c3b189', textTransform: 'uppercase', letterSpacing: '0.05em' }}>

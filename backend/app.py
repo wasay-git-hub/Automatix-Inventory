@@ -740,8 +740,10 @@ def create_purchase_order(req: POCreateRequest):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Generate PO reference number
-        po_number = f"PO-{datetime.now().strftime('%Y%m%d')}-{random.randint(100, 999)}"
+        # Generate sequential PO reference number (e.g. PO-20260719-001)
+        cursor.execute("SELECT COUNT(*) FROM purchase_orders")
+        po_count = cursor.fetchone()[0] + 1
+        po_number = f"PO-{datetime.now().strftime('%Y%m%d')}-{po_count:03d}"
         
         cursor.execute("""
             INSERT INTO purchase_orders (po_number, store_id, product_id, quantity, unit_price_aed, total_cost_aed, sender_phone, receiver_phone, status)
