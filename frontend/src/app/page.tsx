@@ -2080,21 +2080,31 @@ export default function Home() {
                 onChange={(e) => {
                   const newQty = Math.max(1, parseInt(e.target.value) || 1);
                   setPoQty(newQty);
-                  setCustomWaMessage(prev => prev.replace(/Order Qty: \d+ units/, `Order Qty: ${newQty} units`));
+                  setCustomWaMessage(prev => prev.replace(/(?:Order Qty|Qty):\s*\d+/i, `Order Qty: ${newQty}`));
                 }}
                 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#c3b189' }}
               />
             </div>
 
-            {/* Live WhatsApp Message Preview (Editable) */}
+            {/* Live WhatsApp Message Preview (Editable & Bi-Directional Sync) */}
             <div className="login-field" style={{ marginBottom: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <label className="login-label" style={{ margin: 0 }}>WhatsApp Message Draft (Editable)</label>
-                <span style={{ fontSize: '0.72rem', color: '#25D366', fontWeight: 600 }}>Manager Editable</span>
+                <span style={{ fontSize: '0.72rem', color: '#25D366', fontWeight: 600 }}>Bi-Directional Auto Sync</span>
               </div>
               <textarea 
                 value={customWaMessage}
-                onChange={(e) => setCustomWaMessage(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setCustomWaMessage(val);
+                  const match = val.match(/(?:Order Qty|Qty):\s*(\d+)/i);
+                  if (match && match[1]) {
+                    const parsed = parseInt(match[1], 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                      setPoQty(parsed);
+                    }
+                  }
+                }}
                 style={{ 
                   background: '#0b141a', 
                   border: '1px solid #1f2c34', 
