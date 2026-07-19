@@ -230,20 +230,24 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  // Reset transfer notification messages when switching active branch view
+  // Reset notification messages when switching active branch view
   useEffect(() => {
     setTransferMessage(null);
+    setCrudSuccess(null);
+    setCrudError(null);
   }, [userRole, selectedStoreId]);
 
-  // Auto-dismiss transfer notice messages after 4 seconds
+  // Auto-dismiss notice messages after 4 seconds
   useEffect(() => {
-    if (transferMessage) {
+    if (transferMessage || crudSuccess || crudError) {
       const timer = setTimeout(() => {
         setTransferMessage(null);
+        setCrudSuccess(null);
+        setCrudError(null);
       }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [transferMessage]);
+  }, [transferMessage?.text, crudSuccess, crudError]);
 
   // Update a single business rule
   const handleUpdateRule = async (key: keyof Rules, value: string) => {
