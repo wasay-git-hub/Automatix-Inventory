@@ -230,6 +230,21 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  // Reset transfer notification messages when switching active branch view
+  useEffect(() => {
+    setTransferMessage(null);
+  }, [userRole, selectedStoreId]);
+
+  // Auto-dismiss transfer notice messages after 4 seconds
+  useEffect(() => {
+    if (transferMessage) {
+      const timer = setTimeout(() => {
+        setTransferMessage(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [transferMessage]);
+
   // Update a single business rule
   const handleUpdateRule = async (key: keyof Rules, value: string) => {
     try {
@@ -580,7 +595,7 @@ export default function Home() {
     if (!data) return { lowStock: [], nearExpiry: [] };
     const nearExpiryDays = parseInt(data.rules.near_expiry_days_threshold || "3");
     
-    const lowStock = data.inventory.filter(item => item.stock_level <= item.reorder_threshold);
+    const lowStock = data.inventory.filter(item => item.stock_level < item.reorder_threshold);
     const nearExpiry = data.inventory.filter(item => isNearExpiry(item.expiry_date, nearExpiryDays));
     
     return { lowStock, nearExpiry };
@@ -980,13 +995,13 @@ export default function Home() {
                 <div className="notifications-dropdown-menu" style={{
                   position: 'absolute',
                   top: '115%',
-                  right: 0,
+                  left: 0,
                   background: '#12141a',
                   border: '1px solid rgba(195, 177, 137, 0.25)',
                   borderRadius: '12px',
                   width: '380px',
-                  boxShadow: '0 15px 35px rgba(0,0,0,0.6)',
-                  zIndex: 200,
+                  boxShadow: '0 20px 50px rgba(0,0,0,0.8)',
+                  zIndex: 1000,
                   display: 'flex',
                   flexDirection: 'column',
                   overflow: 'hidden'
@@ -1183,7 +1198,7 @@ export default function Home() {
                 {filteredInventory.map((item, idx) => {
                   const key = `${item.store_id}-${item.product_id}`;
                   const isEditing = editingKey === key;
-                  const isLow = item.stock_level <= item.reorder_threshold;
+                  const isLow = item.stock_level < item.reorder_threshold;
                   const isExp = isNearExpiry(item.expiry_date, parseInt(data.rules.near_expiry_days_threshold || "3"));
                   
                   return (

@@ -45,7 +45,7 @@ def run_inventory_audit():
                 FROM store_inventory si
                 JOIN products p ON si.product_id = p.id
                 JOIN stores s ON si.store_id = s.id
-                WHERE si.stock_level <= si.reorder_threshold
+                WHERE si.stock_level < si.reorder_threshold
             """)
             low_stock_items = cursor.fetchall()
             
