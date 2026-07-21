@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Outfit, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+import { AppProvider } from "@/context/AppContext";
+import Shell from "@/components/Shell";
 
 const outfit = Outfit({
   variable: "--font-outfit",
@@ -26,7 +28,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${outfit.variable} ${plusJakarta.variable}`}>
-      <body>{children}</body>
+      <body>
+        <AppProvider>
+          <Shell>{children}</Shell>
+        </AppProvider>
+      </body>
     </html>
   );
 }

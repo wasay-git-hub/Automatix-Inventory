@@ -1,4 +1,4 @@
-from crewai import Task
+from crewai import Agent, Task
 from agents import interface_agent, sql_agent, alerts_agent, analysis_agent, command_agent
 
 # 1. SQL Query Task (SQL Agent)
@@ -109,4 +109,29 @@ command_task = Task(
     expected_output="A polished, human-friendly markdown summary table detailing the successful database modifications.",
     agent=command_agent
 )
+
+# 6. Unified Chat Task (Automatix Agent — single agent, handles Q&A, audits, and DB writes)
+# Built fresh per request alongside its Agent (see build_automatix_agent in agents.py) so
+# concurrent /api/chat calls never share mutable Task/Agent state.
+def build_chat_task(agent: Agent) -> Task:
+    return Task(
+        description=(
+            "1. Read the operator's message: '{message}'\n"
+            "2. Inspect the database schema first if you have not already, so you know the exact tables/columns available "
+            "(stores, products, store_inventory, store_connections, sales_history, business_rules).\n"
+            "3. Decide which of the three modes fits the message and follow ONLY that mode's rules from your backstory:\n"
+            "   - General question -> answer directly and concisely from live query results.\n"
+            "   - Audit/review/analysis request -> produce the full formatted multi-store dashboard (business rules, "
+            "     critical stock alerts, transfer/override recommendations, supplier reorders, promotions), read-only.\n"
+            "   - Database modification command -> safely execute the INSERT/UPDATE/DELETE following the strict rules "
+            "     (fixed store ids, no duplicate products, UPDATE over INSERT for existing rows), verify it, and report it.\n"
+            "4. Never mix modes in a single reply, and never modify data unless the operator explicitly asked for a change.\n"
+            "5. Keep the response focused and well-formatted in markdown; do not expose raw SQL or internal tool call logs."
+        ),
+        expected_output=(
+            "A direct answer, a full markdown audit dashboard, or a markdown modification summary — whichever fits the "
+            "operator's message — written for a supermarket manager."
+        ),
+        agent=agent
+    )
 

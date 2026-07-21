@@ -11,8 +11,8 @@ from typing import List, Dict, Any, Optional
 
 # Import CrewAI orchestration components
 from crewai import Crew
-from agents import interface_agent, sql_agent, alerts_agent, analysis_agent, command_agent
-from tasks import sql_query_task, alerts_task, analysis_task, interface_task, command_task
+from agents import build_automatix_agent
+from tasks import build_chat_task
 
 app = FastAPI(title="Automatix Inventory API", version="1.0.0")
 
@@ -173,11 +173,8 @@ class StockTransfer(BaseModel):
     product_id: int
     quantity: int
 
-class AuditRequest(BaseModel):
-    custom_query: str = None
-
-class CommandRequest(BaseModel):
-    command: str
+class ChatRequest(BaseModel):
+    message: str
 
 class TransferStatusUpdate(BaseModel):
     request_id: int
@@ -392,77 +389,39 @@ def execute_transfer(transfer: StockTransfer):
             conn.close()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/run-audit")
-def run_audit(req: AuditRequest):
-    """Executes the CrewAI squad audit and returns the final markdown report."""
+@app.post("/api/chat")
+def chat(req: ChatRequest):
+    """Single unified agent: answers general questions, runs audits, and executes direct database modifications."""
     openai_api_key = os.environ.get("OPENAI_API_KEY")
     if not openai_api_key or openai_api_key == "your_openai_api_key_here":
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="OpenAI API Key is not configured. Please set a valid OPENAI_API_KEY in the backend/.env file."
         )
 
-    # Base query instruction
-    query_str = req.custom_query if req.custom_query else (
-        "Perform a comprehensive review of our multi-store UAE inventory. "
-        "Scan for low stock (at or below threshold) or near-expiry items across all branches. "
-        "Determine if low stock can be resolved using inter-branch transfers based on connection distances and "
-        "allowable transfer configurations. If transfers aren't feasible, recommend external supplier orders using "
-        "the appropriate reorder multipliers, and suggest promotions for near-expiry products."
-    )
+    if not req.message or not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
     try:
-        # Assemble the Crew
-        inventory_crew = Crew(
-            agents=[interface_agent, sql_agent, alerts_agent, analysis_agent],
-            tasks=[sql_query_task, alerts_task, analysis_task, interface_task],
+        # Fresh Agent + Task per request: CrewAI Agents cache an internal executor, so sharing one
+        # across concurrent requests crashes with "Executor is already running."
+        agent = build_automatix_agent()
+        task = build_chat_task(agent)
+        automatix_crew = Crew(
+            agents=[agent],
+            tasks=[task],
             verbose=True
         )
 
-        # Kickoff the crew execution
-        result = inventory_crew.kickoff(inputs={"query": query_str})
+        result = automatix_crew.kickoff(inputs={"message": req.message})
         raw_result = getattr(result, 'raw', str(result))
-        
-        # Save output to report.md
-        report_path = os.path.join(os.path.dirname(__file__), "report.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(raw_result)
 
         return {
             "status": "success",
-            "report": raw_result
+            "reply": raw_result
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent audit failed: {str(e)}")
-
-@app.post("/api/run-command")
-def run_command(req: CommandRequest):
-    """Executes the database administrator agent squad to run natural language database modifications."""
-    openai_api_key = os.environ.get("OPENAI_API_KEY")
-    if not openai_api_key or openai_api_key == "your_openai_api_key_here":
-        raise HTTPException(
-            status_code=400, 
-            detail="OpenAI API Key is not configured. Please set a valid OPENAI_API_KEY in the backend/.env file."
-        )
-
-    try:
-        # Assemble the Crew for execution
-        command_crew = Crew(
-            agents=[command_agent],
-            tasks=[command_task],
-            verbose=True
-        )
-
-        # Kickoff command execution
-        result = command_crew.kickoff(inputs={"command": req.command})
-        raw_result = getattr(result, 'raw', str(result))
-        
-        return {
-            "status": "success",
-            "result": raw_result
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent command execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
 
 @app.put("/api/inventory/update")
 def update_inventory_item(item: InventoryUpdate):
